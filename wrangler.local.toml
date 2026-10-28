@@ -1,0 +1,26 @@
+# Local-only configuration for development without Cloudflare
+# Usage: npx wrangler dev --config wrangler.local.toml
+
+name = "roundseo-api-local"
+main = "src/worker/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Local development only - no routes needed
+# account_id and zone_id are not needed
+
+[env.local]
+name = "roundseo-local"
+vars = {
+  JWT_SECRET = "dev-secret-key-12345-change-in-production",
+  GOOGLE_CLIENT_ID = "test-client-id",
+  GOOGLE_CLIENT_SECRET = "test-client-secret",
+  GOOGLE_REDIRECT_URI = "http://localhost:8787/api/v2/auth/google/callback",
+  API_URL = "http://localhost:8787",
+  INTERNAL_TOKEN = "test-internal-token"
+}
+
+# Build configuration
+[build]
+cwd = "."
+command = "npm install && npm run build"

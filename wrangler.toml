@@ -1,0 +1,103 @@
+name = "roundseo-api"
+main = "src/worker/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Account configuration - UPDATE THESE for production only
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+
+# Routes - UPDATE DOMAIN (optional for local dev)
+# routes = [
+#   { pattern = "api.yourdomain.com/*" },
+#   { pattern = "api.yourdomain.com" }
+# ]
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "roundseo"
+database_id = "YOUR_DATABASE_ID"
+
+# R2 Bucket binding
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "roundseo-reports"
+
+# NOTE: Queues are configured per-environment below
+
+# Environments
+[env.production]
+name = "roundseo-api-prod"
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+zone_id = "YOUR_ZONE_ID"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "roundseo"
+database_id = "YOUR_DATABASE_ID"
+
+[[env.production.r2_buckets]]
+binding = "R2"
+bucket_name = "roundseo-reports"
+
+[env.production.vars]
+JWT_SECRET = "GENERATE_RANDOM_SECRET"
+AUTH_SECRET = "GENERATE_RANDOM_SECRET"
+GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID"
+GOOGLE_CLIENT_SECRET = "YOUR_GOOGLE_CLIENT_SECRET"
+GOOGLE_REDIRECT_URI = "https://api.yourdomain.com/api/v2/auth/google/callback"
+# Store this outside version control with:
+# wrangler secret put GOOGLE_PAGESPEED_API_KEY --env production
+API_URL = "https://api.yourdomain.com"
+INTERNAL_TOKEN = "GENERATE_RANDOM_TOKEN"
+
+# Staging environment
+[env.staging]
+name = "roundseo-api-staging"
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+zone_id = "YOUR_ZONE_ID"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "roundseo-staging"
+database_id = "YOUR_STAGING_DATABASE_ID"
+
+[[env.staging.r2_buckets]]
+binding = "R2"
+bucket_name = "roundseo-reports-staging"
+
+[env.staging.vars]
+JWT_SECRET = "STAGING_SECRET"
+GOOGLE_CLIENT_ID = "YOUR_STAGING_CLIENT_ID"
+GOOGLE_CLIENT_SECRET = "YOUR_STAGING_SECRET"
+GOOGLE_REDIRECT_URI = "https://staging-api.yourdomain.com/api/v2/auth/google/callback"
+API_URL = "https://staging-api.yourdomain.com"
+
+# Local Development (for `wrangler dev --local`)
+[env.development]
+name = "roundseo-api-dev"
+
+[[env.development.d1_databases]]
+binding = "DB"
+database_name = "roundseo-dev"
+database_id = "00000000-0000-0000-0000-000000000000"  # Dummy ID for local-only dev
+
+# Local R2 simulation (requires --local flag)
+[[env.development.r2_buckets]]
+binding = "R2"
+bucket_name = "roundseo-reports-dev"
+
+[env.development.vars]
+JWT_SECRET = "dev-secret-key-12345-change-in-production"
+GOOGLE_CLIENT_ID = "test-client-id"
+GOOGLE_CLIENT_SECRET = "test-client-secret"
+GOOGLE_REDIRECT_URI = "http://localhost:8787/api/v2/auth/google/callback"
+API_URL = "http://localhost:8787"
+INTERNAL_TOKEN = "test-internal-token"
+DATABASE_URL = ".local/roundseo-dev.db"
+NODE_ENV = "development"
+
+# Migrations
+[[migrations]]
+tag = "v1"
+new = ["001_initial_schema", "002_crawl_schema", "003_keywords_schema", "004_reports_schema", "005_audit_evidence_schema", "006_operating_workflow_schema", "007_finding_evidence", "008_performance_audits"]

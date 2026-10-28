@@ -1,0 +1,87 @@
+/**
+ * Tenant boundary checks shared by every authenticated resource route.
+ * An organization owner or a member of any team in the organization can
+ * access its resources. Returning false lets routes respond with 404 and
+ * avoids exposing whether another tenant's record exists.
+ */
+type Database = any;
+
+export async function canAccessOrganization(db: Database, userId: string, organizationId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT organization.id
+    FROM organizations organization
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE organization.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, organizationId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessWebsite(db: Database, userId: string, websiteId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT website.id
+    FROM websites website
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE website.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, websiteId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessAudit(db: Database, userId: string, auditId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT audit.id
+    FROM audits audit
+    JOIN websites website ON website.id = audit.website_id
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE audit.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, auditId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessCrawlJob(db: Database, userId: string, jobId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT job.id
+    FROM crawl_jobs job
+    JOIN organizations organization ON organization.id = job.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE job.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, jobId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessAction(db: Database, userId: string, actionId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT action.id
+    FROM action_items action
+    JOIN websites website ON website.id = action.website_id
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE action.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, actionId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessPageIdentity(db: Database, userId: string, pageIdentityId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT identity.id
+    FROM page_identities identity
+    JOIN websites website ON website.id = identity.website_id
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE identity.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, pageIdentityId, userId).first();
+  return Boolean(row);
+}
