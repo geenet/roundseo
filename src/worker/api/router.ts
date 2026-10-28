@@ -1,4 +1,6 @@
 // API router for RoundSEO
+import { buildRobotsTxtResponse } from '../../seo/robots';
+import { buildSitemapResponse } from '../../seo/sitemap';
 import { requireAuth } from '../auth/middleware';
 import { handleSignup, handleLogin, handleGoogleCallback, handleGetMe, handleRefresh } from '../auth';
 import { createOrganization, getOrganization, listOrganizations } from '../services/organizations';
@@ -511,12 +513,32 @@ export async function handleContentRoutes(pathname: string, request: Request, db
   return null;
 }
 
+export async function handleSeoRoutes(pathname: string, request: Request, env: any): Promise<Response | null> {
+  if (pathname === '/robots.txt' && request.method === 'GET') {
+    return buildRobotsTxtResponse({
+      sitemapUrl: `${env?.API_URL ?? ''}/sitemap.xml`,
+    });
+  }
+
+  if (pathname === '/sitemap.xml' && request.method === 'GET') {
+    return buildSitemapResponse({
+      baseUrl: env?.API_URL ?? 'https://example.com',
+    });
+  }
+
+  return null;
+}
+
 export async function routeRequest(request: Request, db: any, env: any, ctx?: WaitUntilContext): Promise<Response | null> {
   const url = new URL(request.url);
   const pathname = url.pathname;
 
+  // SEO files (public, no auth)
+  let response = await handleSeoRoutes(pathname, request, env);
+  if (response) return response;
+
   // Try auth routes first
-  let response = await handleAuthRoutes(pathname, request, db, env);
+  response = await handleAuthRoutes(pathname, request, db, env);
   if (response) return response;
 
   // Try organization routes

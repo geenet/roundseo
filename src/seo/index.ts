@@ -3,30 +3,24 @@
  * Integrates inventory, rules, and verification
  */
 
+import {
+  pageInventory,
+  getByIndexingIntent,
+  getHighPriorityPages,
+  validateInventory,
+} from './inventory';
+import { getCriticalRules, getRuleStatistics } from './rules';
+
+// Register Phase 2 checks on module load
+import './checks/phase2';
+
 export * from './types';
 export * from './inventory';
 export * from './rules';
 export * from './verifier';
-
-// Convenience exports
-export {
-  getAllRules,
-  getRule,
-  getRulesByCategory,
-  getRulesByPriority,
-  getCriticalRules,
-  getRuleStatistics,
-} from './rules';
-
-export {
-  pageInventory,
-  getByIndexingIntent,
-  getHighPriorityPages,
-  shouldBeIndexed,
-  validateInventory,
-} from './inventory';
-
-export { runChecks, generateAuditReport, registerCheck } from './verifier';
+export * from './robots';
+export * from './sitemap';
+export * from './metadata';
 
 /**
  * Quick health check: are critical SEO requirements met?
@@ -72,7 +66,6 @@ export function getPhase1Summary() {
       gone: getByIndexingIntent('gone').length,
     },
     rules: {
-      total: ruleStats.total,
       critical: health.criticalRulesCount,
       ...ruleStats,
     },
