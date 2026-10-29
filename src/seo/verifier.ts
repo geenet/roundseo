@@ -20,6 +20,8 @@ export interface VerificationContext {
   headers?: Record<string, string>;
   rawHtml?: string;
   renderedHtml?: string;
+  /** Site-wide internal link graph, for checks that need cross-page context (e.g. LINK-001) */
+  internalLinkEdges?: { from: string; to: string; scriptOnly?: boolean }[];
 }
 
 export type CheckFunction = (
