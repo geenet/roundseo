@@ -1,7 +1,7 @@
 /**
  * Phase 4 Verification Checks: Page Content and Presentation
- * Rules covered: CONTENT-003 through CONTENT-006, CONTENT-009 through
- * CONTENT-013, CONTENT-015, CONTENT-020, CONTENT-021.
+ * Rules covered: CONTENT-001, CONTENT-003 through CONTENT-006, CONTENT-009
+ * through CONTENT-013, CONTENT-015, CONTENT-020, CONTENT-021.
  */
 
 import { registerCheck } from '../verifier';
@@ -72,6 +72,47 @@ registerCheck('CONTENT-006', async (ctx) => {
     'https://developers.google.com/search/docs/specialty/international/managing-multi-regional-sites',
     'The declared document language must match the page\'s intended locale.'
   );
+});
+
+// ---------------------------------------------------------------------------
+// CONTENT-001: Match pages to user tasks
+// "mixed" automation (per rules.ts): the metadata-completeness half is
+// automatable; actual task-satisfaction always needs a human reviewer
+// completing the target task on the published page, so it surfaces as
+// manual_review rather than pass/fail.
+// ---------------------------------------------------------------------------
+registerCheck('CONTENT-001', async (ctx) => {
+  if (ctx.page.indexing_intent !== 'index') return null;
+
+  if (!ctx.page.audience_task?.trim() || !ctx.page.page_type?.trim()) {
+    return {
+      rule_id: 'CONTENT-001',
+      url_or_template: ctx.url,
+      applicable_scope: 'Indexable pages',
+      severity: 'medium',
+      status: 'fail',
+      observed_evidence: 'Page is missing an intended audience_task or page_type in the inventory.',
+      expected_behavior: "Define each page's audience, primary task, and page type before evaluating task alignment.",
+      source_urls: ['https://www.google.com/search/howsearchworks/how-search-works/ranking-results/'],
+      observed_at: new Date().toISOString(),
+      verification_coverage: 'automated',
+      remediation_owner: 'product',
+    };
+  }
+
+  return {
+    rule_id: 'CONTENT-001',
+    url_or_template: ctx.url,
+    applicable_scope: 'Indexable pages',
+    severity: 'low',
+    status: 'manual_review',
+    observed_evidence: `Intent metadata is recorded (audience_task: "${ctx.page.audience_task}"); whether the page actually satisfies that task requires a reviewer completing it on the published page.`,
+    expected_behavior: "Have a reviewer complete the page's target task using the published page; record unresolved gaps rather than inventing a quality score.",
+    source_urls: ['https://www.google.com/search/howsearchworks/how-search-works/ranking-results/'],
+    observed_at: new Date().toISOString(),
+    verification_coverage: 'manual',
+    remediation_owner: 'content',
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -215,6 +256,7 @@ export { runChecks as runPhase4Checks } from '../verifier';
  */
 export function getPhase4RuleIds(): string[] {
   return [
+    'CONTENT-001', // catalog entry from Phase 1; check implemented here
     'CONTENT-003', 'CONTENT-004', 'CONTENT-005', 'CONTENT-006',
     'CONTENT-009', 'CONTENT-010',
     'CONTENT-011', 'CONTENT-012', 'CONTENT-013', 'CONTENT-015',

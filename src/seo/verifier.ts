@@ -7,7 +7,6 @@ import {
   AuditFinding,
   AuditReport,
   AuditStatus,
-  Rule,
   PageInventory,
 } from './types';
 import { pageInventory } from './inventory';
@@ -22,6 +21,8 @@ export interface VerificationContext {
   renderedHtml?: string;
   /** Site-wide internal link graph, for checks that need cross-page context (e.g. LINK-001) */
   internalLinkEdges?: { from: string; to: string; scriptOnly?: boolean }[];
+  /** Site-wide crawl log, for checks that need request-rate context (e.g. TECH-004) */
+  crawlLog?: { url: string; crawled_at: string; resource_type: 'page' | 'asset' | 'other'; http_status?: number }[];
 }
 
 export type CheckFunction = (
@@ -29,15 +30,24 @@ export type CheckFunction = (
 ) => Promise<AuditFinding | null>;
 
 /**
- * Registry of automated checks
+ * Registry of automated checks. A rule can have more than one independent
+ * check (e.g. TECH-029 needs both a chain-length check and a loop check),
+ * so each rule ID maps to a list of check functions, all of which run.
  */
-const checks: Map<string, CheckFunction> = new Map();
+const checks: Map<string, CheckFunction[]> = new Map();
 
 /**
- * Register a check for a rule
+ * Register a check for a rule. Safe to call more than once for the same
+ * rule ID — each call adds an independent check rather than replacing the
+ * previous one.
  */
 export function registerCheck(ruleId: string, check: CheckFunction): void {
-  checks.set(ruleId, check);
+  const existing = checks.get(ruleId);
+  if (existing) {
+    existing.push(check);
+  } else {
+    checks.set(ruleId, [check]);
+  }
 }
 
 /**
@@ -58,8 +68,10 @@ export async function runChecks(
   const rules = getAllRules();
 
   for (const rule of rules) {
-    const check = checks.get(rule.id);
-    if (check) {
+    const ruleChecks = checks.get(rule.id);
+    if (!ruleChecks) continue;
+
+    for (const check of ruleChecks) {
       try {
         const finding = await check(context);
         if (finding) {

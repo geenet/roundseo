@@ -279,7 +279,10 @@ registerCheck('TECH-030', async (ctx) => {
   };
 });
 
-registerCheck('TECH-029-loops', async (ctx) => {
+// Second, independent check under TECH-029: loop detection. registerCheck()
+// allows more than one check per rule ID, so this runs alongside the
+// chain-length check above rather than replacing it.
+registerCheck('TECH-029', async (ctx) => {
   if (ctx.page.page_id !== 'home') return null;
 
   const loops = detectRedirectLoops();

@@ -1,15 +1,59 @@
 /**
  * Phase 2 P0 Verification Checks: Eligibility and Rendering
- * Rules covered: TECH-001 through TECH-007, TECH-015 through TECH-022
+ * Rules covered: TECH-003 through TECH-007, TECH-015, TECH-017, TECH-018,
+ * TECH-021, TECH-022. (TECH-001/TECH-002/OVERALL-001 are Phase 1 built-ins
+ * in verifier.ts — see release.ts for the full attribution.)
  *
  * These checks are designed to run against live or staged pages.
  * They extend the verifier framework from Phase 1.
  */
 
 import { registerCheck } from '../verifier';
+import { calculateCrawlErrorRate } from '../crawl-efficiency';
 
 const MINIMUM_CONTENT_BYTES = 500;
 const RESOURCE_FETCH_LIMIT_BYTES = 2 * 1024 * 1024; // 2 MB
+
+// ---------------------------------------------------------------------------
+// TECH-004: Monitor server health (5xx/429/DNS failure rate against Googlebot)
+// Runs once per audit pass (keyed on the homepage) since it evaluates the
+// whole crawl log, not a single page.
+// ---------------------------------------------------------------------------
+registerCheck('TECH-004', async (ctx) => {
+  if (ctx.page.page_id !== 'home') return null;
+  if (!ctx.crawlLog) {
+    return {
+      rule_id: 'TECH-004',
+      url_or_template: 'crawl-log',
+      applicable_scope: 'All crawl requests',
+      severity: 'medium',
+      status: 'unknown',
+      observed_evidence: 'No crawl log was supplied to the verifier (VerificationContext.crawlLog is unset).',
+      expected_behavior: 'Track 5xx, 429, and DNS failures against verified Googlebot requests; alert when failures exceed 5% of requests.',
+      source_urls: ['https://developers.google.com/search/docs/crawling-indexing/http-network-errors'],
+      observed_at: new Date().toISOString(),
+      verification_coverage: 'automated',
+      remediation_owner: 'platform',
+    };
+  }
+
+  const rate = calculateCrawlErrorRate(ctx.crawlLog);
+  if (!rate.exceeds_alert_threshold) return null;
+
+  return {
+    rule_id: 'TECH-004',
+    url_or_template: 'crawl-log',
+    applicable_scope: 'All crawl requests',
+    severity: 'high',
+    status: 'fail',
+    observed_evidence: `${rate.failing_requests} of ${rate.total_requests} crawl requests failed (${((rate.error_rate ?? 0) * 100).toFixed(1)}%), exceeding the 5% alert threshold.`,
+    expected_behavior: 'Server error rate against Googlebot requests should stay at or below 5%.',
+    source_urls: ['https://developers.google.com/search/docs/crawling-indexing/http-network-errors'],
+    observed_at: new Date().toISOString(),
+    verification_coverage: 'automated',
+    remediation_owner: 'platform',
+  };
+});
 
 // ---------------------------------------------------------------------------
 // TECH-003: 404/410 for genuinely missing pages
@@ -58,7 +102,7 @@ registerCheck('TECH-003', async (ctx) => {
 // ---------------------------------------------------------------------------
 // TECH-005 (extended): robots.txt file size and validity
 // ---------------------------------------------------------------------------
-registerCheck('TECH-005-size', async (ctx) => {
+registerCheck('TECH-005', async (ctx) => {
   if (!ctx.rawHtml) return null;
   // This check applies only to /robots.txt fetches
   if (ctx.url !== '/robots.txt') return null;
@@ -88,7 +132,7 @@ registerCheck('TECH-005-size', async (ctx) => {
 // ---------------------------------------------------------------------------
 // TECH-006 (extended): noindex in initial HTML vs inventory intent
 // ---------------------------------------------------------------------------
-registerCheck('TECH-006-header', async (ctx) => {
+registerCheck('TECH-006', async (ctx) => {
   if (!ctx.headers) return null;
 
   const xRobots = ctx.headers['x-robots-tag'] ?? '';
@@ -302,10 +346,8 @@ export { runChecks as runPhase2Checks } from '../verifier';
  */
 export function getPhase2RuleIds(): string[] {
   return [
-    'TECH-001', 'TECH-002', 'TECH-003', 'TECH-004',
-    'TECH-005', 'TECH-005-size',
-    'TECH-006', 'TECH-006-header',
-    'TECH-007', 'OVERALL-001',
+    'TECH-003', 'TECH-004',
+    'TECH-005', 'TECH-006', 'TECH-007',
     'TECH-015', 'TECH-017', 'TECH-018', 'TECH-021', 'TECH-022',
   ];
 }

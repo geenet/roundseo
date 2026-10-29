@@ -41,6 +41,39 @@ export function calculateCrawlLatency(page: PageInventory, log: CrawlLogEntry[])
   return Math.max(0, (firstCrawl - published) / (1000 * 60 * 60 * 24));
 }
 
+export interface CrawlErrorRate {
+  total_requests: number;
+  failing_requests: number;
+  error_rate: number | null;
+  /** True once error_rate crosses the 5% alert threshold Google's docs reference for crawl health */
+  exceeds_alert_threshold: boolean;
+}
+
+const CRAWL_ERROR_ALERT_THRESHOLD = 0.05;
+
+/**
+ * TECH-004: monitor server health by tracking the share of crawl requests
+ * that failed (5xx, 429, or an unresolved fetch). Alerts once failures
+ * exceed 5% of requests in the log window — this is a server-health signal,
+ * not a per-page eligibility check, so it's computed over the whole log
+ * rather than per URL.
+ */
+export function calculateCrawlErrorRate(log: CrawlLogEntry[]): CrawlErrorRate {
+  const total_requests = log.length;
+  const failing_requests = log.filter(
+    (e) => e.http_status !== undefined && (e.http_status >= 500 || e.http_status === 429 || e.http_status === 0)
+  ).length;
+
+  const error_rate = total_requests > 0 ? failing_requests / total_requests : null;
+
+  return {
+    total_requests,
+    failing_requests,
+    error_rate,
+    exceeds_alert_threshold: error_rate !== null && error_rate > CRAWL_ERROR_ALERT_THRESHOLD,
+  };
+}
+
 /**
  * Percentage of crawl requests that fetched an actual page, as opposed to
  * infrastructure/asset requests (CSS, JS, images, etc.). A low percentage
