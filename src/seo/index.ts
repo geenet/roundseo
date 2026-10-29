@@ -34,6 +34,7 @@ export * from './links';
 export * from './web-vitals';
 export * from './search-performance';
 export * from './crawl-efficiency';
+export * from './release';
 
 /**
  * Quick health check: are critical SEO requirements met?

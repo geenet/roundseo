@@ -41,6 +41,14 @@ export function registerCheck(ruleId: string, check: CheckFunction): void {
 }
 
 /**
+ * Rule IDs that currently have an automated or semi-automated check
+ * registered. Used by release reporting to compute catalog coverage.
+ */
+export function getRegisteredCheckIds(): string[] {
+  return Array.from(checks.keys());
+}
+
+/**
  * Run all applicable checks for a URL
  */
 export async function runChecks(
