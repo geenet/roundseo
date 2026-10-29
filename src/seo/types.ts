@@ -19,6 +19,26 @@ export interface PageInventory {
   applicable_features: string[];
   /** Shared id linking locale variants of the same content (Phase 3 hreflang) */
   translation_group?: string;
+
+  // Phase 4: Page Content and Presentation
+  /** The <title> text actually served for this page */
+  title?: string;
+  /** The meta description text actually served for this page */
+  meta_description?: string;
+  /** Accountable author for editorial/article content (CONTENT-011) */
+  author?: AuthorInfo;
+  /** True if an AI system drafted/assisted this content (CONTENT-015) */
+  ai_assisted?: boolean;
+  /** When a human editor last reviewed this content; required if ai_assisted (CONTENT-015) */
+  human_reviewed_at?: string;
+}
+
+export interface AuthorInfo {
+  name: string;
+  /** Profile/bio URL establishing accountability */
+  url?: string;
+  /** Short credential or role statement, e.g. "Senior SEO Analyst" */
+  credential?: string;
 }
 
 export type IndexingIntent = 'index' | 'noindex' | 'private' | 'redirect' | 'gone';
@@ -180,3 +200,11 @@ export interface PaginationSeries {
   url_template: string;
   total_pages: number;
 }
+
+// Phase 4: Page Content and Presentation
+
+/** A JSON-LD structured data object. Shape varies by @type (schema.org). */
+export type StructuredDataObject = Record<string, unknown> & {
+  '@context': 'https://schema.org';
+  '@type': string;
+};

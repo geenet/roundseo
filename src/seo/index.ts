@@ -11,9 +11,10 @@ import {
 } from './inventory';
 import { getCriticalRules, getRuleStatistics } from './rules';
 
-// Register Phase 2 and Phase 3 checks on module load
+// Register Phase 2, 3, and 4 checks on module load
 import './checks/phase2';
 import './checks/phase3';
+import './checks/phase4';
 
 export * from './types';
 export * from './inventory';
@@ -25,6 +26,9 @@ export * from './metadata';
 export * from './redirects';
 export * from './hreflang';
 export * from './pagination';
+export * from './content';
+export * from './structured-data';
+export * from './eeat';
 
 /**
  * Quick health check: are critical SEO requirements met?
