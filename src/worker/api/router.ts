@@ -1,6 +1,7 @@
 // API router for RoundSEO
 import { buildRobotsTxtResponse } from '../../seo/robots';
 import { buildSitemapResponse } from '../../seo/sitemap';
+import { buildRedirectResponse } from '../../seo/redirects';
 import { requireAuth } from '../auth/middleware';
 import { handleSignup, handleLogin, handleGoogleCallback, handleGetMe, handleRefresh } from '../auth';
 import { createOrganization, getOrganization, listOrganizations } from '../services/organizations';
@@ -529,9 +530,22 @@ export async function handleSeoRoutes(pathname: string, request: Request, env: a
   return null;
 }
 
+/**
+ * Serve declared redirects (TECH-028/029/030) before any other routing.
+ * Every entry resolves to its final destination in a single hop (TECH-029).
+ */
+export function handleRedirectRoutes(pathname: string, request: Request, env: any): Response | null {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  return buildRedirectResponse(pathname, env?.API_URL ?? '');
+}
+
 export async function routeRequest(request: Request, db: any, env: any, ctx?: WaitUntilContext): Promise<Response | null> {
   const url = new URL(request.url);
   const pathname = url.pathname;
+
+  // Declared redirects take priority over everything else
+  const redirectResponse = handleRedirectRoutes(pathname, request, env);
+  if (redirectResponse) return redirectResponse;
 
   // SEO files (public, no auth)
   let response = await handleSeoRoutes(pathname, request, env);

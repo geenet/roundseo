@@ -17,6 +17,8 @@ export interface PageInventory {
   publication_date?: string;
   substantive_update_date?: string;
   applicable_features: string[];
+  /** Shared id linking locale variants of the same content (Phase 3 hreflang) */
+  translation_group?: string;
 }
 
 export type IndexingIntent = 'index' | 'noindex' | 'private' | 'redirect' | 'gone';
@@ -142,4 +144,39 @@ export interface PhaseDeliverable {
   description: string;
   status: 'pending' | 'in_progress' | 'completed';
   file_path?: string;
+}
+
+// Phase 3: Canonicalization and Architecture
+
+/** HTTP redirect status codes Google treats as permanent or temporary signals */
+export type RedirectType = 301 | 302 | 307 | 308;
+
+export interface RedirectEntry {
+  /** Source path, e.g. '/old-page' */
+  from: string;
+  /** Destination path or absolute URL — must be the FINAL destination, not an intermediate hop (TECH-029) */
+  to: string;
+  type: RedirectType;
+  /** Why this redirect exists (migration, rename, merge) */
+  reason: string;
+  created_at: string;
+  /**
+   * Keep this redirect live until this date. Migration redirects should be
+   * retained at least one year (TECH-030).
+   */
+  retain_until: string;
+}
+
+export interface HreflangAlternate {
+  /** BCP 47 language tag, or 'x-default' */
+  hreflang: string;
+  href: string;
+}
+
+export interface PaginationSeries {
+  /** series identifier, e.g. 'blog-listing' */
+  series_id: string;
+  /** URL template with {page} placeholder, e.g. '/blog?page={page}' */
+  url_template: string;
+  total_pages: number;
 }

@@ -134,6 +134,44 @@ export function validateSitemap(xml: string): string[] {
 }
 
 /**
+ * Split the indexable inventory into chunks that each respect the
+ * 50,000 URL sitemap limit (TECH-013). Returns one array per output file.
+ */
+export function chunkIndexableUrls<T>(items: T[], maxPerFile = SITEMAP_MAX_URLS): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += maxPerFile) {
+    chunks.push(items.slice(i, i + maxPerFile));
+  }
+  return chunks;
+}
+
+/**
+ * Generate a sitemap index XML document pointing at child sitemap files.
+ * Use this once the inventory exceeds the single-file limits (TECH-013).
+ */
+export function generateSitemapIndexXml(
+  sitemapUrls: { loc: string; lastmod?: string }[]
+): string {
+  const entries = sitemapUrls.map((s) => {
+    const lm = s.lastmod ?? new Date().toISOString().slice(0, 10);
+    return [
+      '  <sitemap>',
+      `    <loc>${xmlEscape(s.loc)}</loc>`,
+      `    <lastmod>${lm}</lastmod>`,
+      '  </sitemap>',
+    ].join('\n');
+  });
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...entries,
+    '</sitemapindex>',
+    '',
+  ].join('\n');
+}
+
+/**
  * Build the HTTP Response for GET /sitemap.xml
  */
 export function buildSitemapResponse(config: SitemapConfig): Response {
