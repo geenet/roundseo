@@ -2,6 +2,7 @@
  * SEO System Tests and Examples
  */
 
+import { describe, test, expect } from 'vitest';
 import {
   pageInventory,
   validateInventory,
