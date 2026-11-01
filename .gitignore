@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 pnpm-lock.yaml
 yarn.lock
 
@@ -29,6 +28,8 @@ out/
 # Testing
 coverage/
 .nyc_output/
+test-results/
+playwright-report/
 
 # Logs
 logs/

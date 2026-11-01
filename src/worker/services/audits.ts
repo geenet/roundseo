@@ -4,9 +4,8 @@ import { BaseCrawler, type CrawlResult } from '../crawlers/base';
 import { parsePageMetrics } from '../crawlers/parser';
 import { calculateSiteMetrics } from '../crawlers/metrics';
 import { getAuditFoundation, persistAuditFoundation } from './audit-foundation';
-import { fetchPageSpeedData } from './integrations';
 import { persistPerformanceAudit } from './performance';
-import type { CrawlJobMessage } from '../../shared/operating-model';
+import type { CrawlJobMessage, PerformanceAudit } from '../../shared/operating-model';
 
 export interface Audit {
   id: string;
@@ -63,7 +62,7 @@ export async function createAudit(db: any, websiteId: string, type: Audit['type'
     'queued',
     JSON.stringify(options.costBudget || (type === 'performance'
       ? { maxPageSpeedDevices: 2, timeoutMs: 90_000 }
-      : { maxPages: 500, maxDepth: 5, timeoutMs: 30_000 })),
+      : { maxPages: 500, maxDepth: 50, timeoutMs: 30_000 })),
     now,
   ).run();
 
@@ -130,9 +129,11 @@ export async function startAudit(db: any, auditId: string, websiteUrl: string, j
       timeout: budget.timeoutMs,
       delay,
       excludedPaths: crawlScope.excludedPaths,
+      discoverSitemaps: true,
     });
 
     const results = await crawler.crawl();
+    const discovery = crawler.getCoverageSnapshot();
 
     // Parse each successful HTML document once. Redirect aliases can resolve to
     // the same final page, so storing both would falsely create duplicates.
@@ -164,7 +165,8 @@ export async function startAudit(db: any, auditId: string, websiteUrl: string, j
       maxPages: budget.maxPages,
       maxDepth: budget.maxDepth,
       rendered: false,
-      limitReached: results.length >= budget.maxPages,
+      limitReached: discovery.limitReached,
+      discovery,
     });
 
     for (const result of results.filter(result => (result.statusCode === 0 && !result.blockedByRobots) || result.statusCode >= 400)) {
@@ -288,7 +290,7 @@ export async function startAudit(db: any, auditId: string, websiteUrl: string, j
   }
 }
 
-/** Execute the provider job and retain both lab and real-user evidence. */
+/** Execute our browser runner; do not fall back to an external PageSpeed API. */
 export async function startPerformanceAudit(db: any, env: any, auditId: string, websiteUrl: string, jobId?: string): Promise<void> {
   if (jobId && !(await claimCrawlJob(db, jobId))) return;
   await db.prepare('UPDATE audits SET status = ? WHERE id = ?').bind('running', auditId).run();
@@ -303,7 +305,21 @@ export async function startPerformanceAudit(db: any, env: any, auditId: string, 
       WHERE audit.id = ?
     `).bind(auditId).first();
     if (!auditRow?.website_id || !auditRow?.url) throw new Error('Performance audit website could not be found');
-    const report = await fetchPageSpeedData(String(auditRow.url || websiteUrl), env);
+    const targetUrl = String(auditRow.url || websiteUrl);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const request = { method: 'POST', headers, body: JSON.stringify({ url: targetUrl }), signal: AbortSignal.timeout(120_000) };
+    let response: Response;
+    if (env?.PERFORMANCE_RUNNER?.fetch) {
+      response = await env.PERFORMANCE_RUNNER.fetch('https://roundseo-performance.internal/audit', request);
+    } else if (typeof env?.ROUNDSEO_PERFORMANCE_RUNNER_URL === 'string' && typeof env?.ROUNDSEO_RUNNER_TOKEN === 'string' && env.ROUNDSEO_RUNNER_TOKEN.length >= 24) {
+      const runnerUrl = new URL(env.ROUNDSEO_PERFORMANCE_RUNNER_URL);
+      if (runnerUrl.protocol !== 'https:' || runnerUrl.username || runnerUrl.password) throw new Error('The performance runner endpoint must use HTTPS without URL credentials.');
+      headers.Authorization = `Bearer ${env.ROUNDSEO_RUNNER_TOKEN}`;
+      response = await fetch(runnerUrl.href, request);
+    } else throw new Error('The RoundSEO browser performance runner is not configured for this server.');
+    if (!response.ok) throw new Error(`RoundSEO browser performance runner returned HTTP ${response.status}.`);
+    const report = await response.json() as PerformanceAudit;
+    if (report.provider !== 'local_browser' || report.targetUrl !== targetUrl || !Array.isArray(report.devices)) throw new Error('RoundSEO browser performance runner returned an invalid report.');
     await persistPerformanceAudit(db, {
       auditId,
       websiteId: String(auditRow.website_id),
@@ -315,7 +331,7 @@ export async function startPerformanceAudit(db: any, env: any, auditId: string, 
     `).bind('completed', completedAt, 0, 0, auditId).run();
     if (jobId) await completeCrawlJob(db, jobId, completedAt);
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'PageSpeed audit could not be completed';
+    const errorMsg = error instanceof Error ? error.message : 'Browser performance audit could not be completed';
     const failedAt = new Date().toISOString();
     await db.prepare('UPDATE audits SET status = ?, error_message = ?, completed_at = ? WHERE id = ?')
       .bind('failed', errorMsg, failedAt, auditId)
@@ -446,7 +462,7 @@ function parseStringArray(value: unknown): string[] {
 }
 
 async function loadCrawlBudget(db: any, jobId?: string): Promise<{ maxPages: number; maxDepth: number; timeoutMs: number }> {
-  const defaults = { maxPages: 500, maxDepth: 5, timeoutMs: 30_000 };
+  const defaults = { maxPages: 500, maxDepth: 50, timeoutMs: 30_000 };
   if (!jobId) return defaults;
   const job = await getCrawlJob(db, jobId);
   if (!job?.cost_budget_json) return defaults;
@@ -454,7 +470,7 @@ async function loadCrawlBudget(db: any, jobId?: string): Promise<{ maxPages: num
     const raw = JSON.parse(String(job.cost_budget_json)) as Record<string, unknown>;
     return {
       maxPages: boundedInteger(raw.maxPages, defaults.maxPages, 1, 500),
-      maxDepth: boundedInteger(raw.maxDepth, defaults.maxDepth, 0, 8),
+      maxDepth: boundedInteger(raw.maxDepth, defaults.maxDepth, 0, 50),
       timeoutMs: boundedInteger(raw.timeoutMs, defaults.timeoutMs, 1_000, 60_000),
     };
   } catch {

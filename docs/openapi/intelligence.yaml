@@ -1,0 +1,483 @@
+openapi: 3.1.0
+info:
+  title: RoundSEO Intelligence API
+  version: 2.0.0
+  description: >
+    Native search intelligence for a RoundSEO website. Collection uses RoundSEO's
+    own collectors, stored observations, and analysis. Metrics without a configured
+    source are returned as null and listed in `unavailable`. See docs/INTELLIGENCE_API.md.
+servers:
+  - url: https://api.example.com/api/v2
+    description: Replace with your deployed Worker origin.
+security:
+  - bearerAuth: []
+tags:
+  - name: Status
+  - name: Runs
+  - name: Evidence
+  - name: Assets
+paths:
+  /intelligence/status:
+    get:
+      tags: [Status]
+      operationId: getIntelligenceStatus
+      summary: Availability of each intelligence action on this deployment
+      responses:
+        '200':
+          description: Capability status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CapabilityStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /websites/{websiteId}/intelligence/runs:
+    parameters:
+      - $ref: '#/components/parameters/WebsiteId'
+    get:
+      tags: [Runs]
+      operationId: listIntelligenceRuns
+      summary: Saved runs for a website, newest first, without evidence
+      parameters:
+        - name: capability
+          in: query
+          schema: { $ref: '#/components/schemas/Capability' }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 100000, default: 0 }
+      responses:
+        '200':
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items: { $ref: '#/components/schemas/Run' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Runs]
+      operationId: createIntelligenceRun
+      summary: Start one intelligence action
+      description: >
+        Single-shot actions complete inline (201). `site_crawl` returns 202 with a
+        queued run; poll the run until it is terminal. Replaying the same
+        Idempotency-Key with the same body returns the stored run (200).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunRequest' }
+      responses:
+        '200': { description: Stored run replayed for this Idempotency-Key, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+        '201': { description: Completed run, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+        '202': { description: Queued crawl run, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /websites/{websiteId}/intelligence/runs/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/WebsiteId'
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Runs]
+      operationId: getIntelligenceRun
+      summary: One run with its first 1000 evidence records
+      responses:
+        '200': { description: Run, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /websites/{websiteId}/intelligence/runs/{runId}/refresh:
+    parameters:
+      - $ref: '#/components/parameters/WebsiteId'
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: refreshIntelligenceCrawl
+      summary: Start a new crawl linked to a finished site crawl
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202': { description: Queued refresh run, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Error' }
+  /websites/{websiteId}/intelligence/runs/{runId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/WebsiteId'
+      - $ref: '#/components/parameters/RunId'
+    post:
+      tags: [Runs]
+      operationId: cancelIntelligenceCrawl
+      summary: Stop a queued or running site crawl; collected pages remain
+      responses:
+        '202': { description: Cancellation requested, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Error' }
+  /websites/{websiteId}/intelligence/evidence:
+    parameters:
+      - $ref: '#/components/parameters/WebsiteId'
+    get:
+      tags: [Evidence]
+      operationId: listIntelligenceEvidence
+      summary: Evidence for the website's current snapshots
+      parameters:
+        - name: capability
+          in: query
+          schema: { $ref: '#/components/schemas/Capability' }
+        - name: kind
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 100000, default: 0 }
+      responses:
+        '200':
+          description: Evidence records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [evidence]
+                properties:
+                  evidence:
+                    type: array
+                    items: { $ref: '#/components/schemas/Evidence' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /websites/{websiteId}/intelligence/assets/{assetId}:
+    parameters:
+      - $ref: '#/components/parameters/WebsiteId'
+      - name: assetId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Assets]
+      operationId: getIntelligenceAsset
+      summary: Screenshot bytes through a signed URL. No bearer token is required.
+      security: []
+      parameters:
+        - name: expires
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: sig
+          in: query
+          required: true
+          schema: { type: string, pattern: '^[a-f0-9]{64}$' }
+      responses:
+        '200':
+          description: PNG image
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    WebsiteId:
+      name: websiteId
+      in: path
+      required: true
+      schema: { type: string }
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' }
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found for this caller
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error:
+      description: Request failed with a stable code
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string }
+    Capability:
+      type: string
+      enum: [keyword_research, market_intelligence, app_intelligence, serp_analysis, answer_engine_visibility, page_intelligence]
+    CapabilityStatus:
+      type: object
+      required: [available, capabilities, actions, safeguards]
+      properties:
+        available: { type: boolean }
+        capabilities:
+          type: array
+          items: { $ref: '#/components/schemas/Capability' }
+        actions:
+          type: array
+          items:
+            type: object
+            required: [action, capability, available, reason, sources]
+            properties:
+              action: { type: string }
+              capability: { $ref: '#/components/schemas/Capability' }
+              available: { type: boolean }
+              reason: { type: [string, 'null'] }
+              sources: { type: array, items: { type: string } }
+        safeguards:
+          type: object
+          required: [maximumSiteCrawlPages, maximumLiveRequestsPerDay]
+          properties:
+            maximumSiteCrawlPages: { type: integer }
+            maximumLiveRequestsPerDay: { type: integer }
+    RunRequest:
+      description: One action. The `action` field selects the variant; unknown fields are ignored.
+      oneOf:
+        - $ref: '#/components/schemas/KeywordDiscoveryRequest'
+        - $ref: '#/components/schemas/KeywordOverviewRequest'
+        - $ref: '#/components/schemas/KeywordMetricsRequest'
+        - $ref: '#/components/schemas/KeywordTrendsRequest'
+        - $ref: '#/components/schemas/DomainRequest'
+        - $ref: '#/components/schemas/AppCompetitorsRequest'
+        - $ref: '#/components/schemas/AppRankingsRequest'
+        - $ref: '#/components/schemas/SerpSnapshotRequest'
+        - $ref: '#/components/schemas/AnswerRequest'
+        - $ref: '#/components/schemas/AnswerSnapshotRequest'
+        - $ref: '#/components/schemas/AnswerDemandRequest'
+        - $ref: '#/components/schemas/PageRequest'
+        - $ref: '#/components/schemas/SiteCrawlRequest'
+      discriminator:
+        propertyName: action
+    Market:
+      type: object
+      required: [countryCode, languageCode]
+      properties:
+        countryCode: { type: string, pattern: '^[A-Za-z]{2}$', description: 'ISO 3166-1 alpha-2, such as US' }
+        languageCode: { type: string, pattern: '^[A-Za-z]{2}(-[A-Za-z]{2})?$', description: 'Such as en' }
+    KeywordDiscoveryRequest:
+      allOf:
+        - $ref: '#/components/schemas/Market'
+        - type: object
+          required: [action, seeds]
+          properties:
+            action: { const: keyword_discovery }
+            seeds: { type: array, minItems: 1, maxItems: 20, items: { type: string, maxLength: 120 } }
+            limit: { type: integer, minimum: 1, maximum: 1000 }
+    KeywordOverviewRequest:
+      allOf:
+        - $ref: '#/components/schemas/Market'
+        - type: object
+          required: [action, keywords]
+          properties:
+            action: { const: keyword_overview }
+            keywords: { type: array, minItems: 1, maxItems: 50, items: { type: string, maxLength: 120 } }
+    KeywordMetricsRequest:
+      allOf:
+        - $ref: '#/components/schemas/Market'
+        - type: object
+          required: [action, source, keywords]
+          properties:
+            action: { const: keyword_metrics }
+            source: { enum: [google, bing], description: 'bing returns 503 until a Microsoft Advertising source is configured' }
+            keywords: { type: array, minItems: 1, maxItems: 50, items: { type: string, maxLength: 120 } }
+    KeywordTrendsRequest:
+      allOf:
+        - $ref: '#/components/schemas/Market'
+        - type: object
+          required: [action, keywords]
+          properties:
+            action: { const: keyword_trends }
+            keywords: { type: array, minItems: 1, maxItems: 20, items: { type: string, maxLength: 120 } }
+    DomainRequest:
+      type: object
+      required: [action, domain, countryCode]
+      properties:
+        action: { enum: [domain_rankings, domain_competitors, market_categories] }
+        domain: { type: string, description: 'Must be the website domain' }
+        countryCode: { type: string, pattern: '^[A-Za-z]{2}$' }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+    AppCompetitorsRequest:
+      type: object
+      required: [action, marketplace, appId, countryCode]
+      properties:
+        action: { const: app_competitors }
+        marketplace: { enum: [google_play, apple_app_store] }
+        appId: { type: string, description: 'Numeric for Apple; package name such as com.example.app for Google Play' }
+        countryCode: { type: string, pattern: '^[A-Za-z]{2}$' }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+    AppRankingsRequest:
+      type: object
+      required: [action, marketplace, appId, countryCode, keywords]
+      properties:
+        action: { const: app_rankings }
+        marketplace: { enum: [google_play, apple_app_store] }
+        appId: { type: string }
+        countryCode: { type: string, pattern: '^[A-Za-z]{2}$' }
+        keywords: { type: array, minItems: 1, maxItems: 20, items: { type: string, maxLength: 120 } }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+    SerpSnapshotRequest:
+      allOf:
+        - $ref: '#/components/schemas/Market'
+        - type: object
+          required: [action, surface, query]
+          properties:
+            action: { const: serp_snapshot }
+            surface: { enum: [google, google_maps, google_ai, bing, youtube] }
+            query: { type: string, maxLength: 200 }
+            device: { enum: [desktop, mobile], default: desktop }
+            resultLimit: { type: integer, minimum: 1, maximum: 100, default: 20 }
+            targetDomain: { type: string }
+    AnswerRequest:
+      type: object
+      required: [action, engine, prompt, model]
+      properties:
+        action: { const: answer_response }
+        engine: { $ref: '#/components/schemas/AnswerEngine' }
+        prompt: { type: string, maxLength: 2000 }
+        model: { type: string, maxLength: 80 }
+        targetDomain: { type: string }
+        maximumOutputTokens: { type: integer, minimum: 1, maximum: 2048 }
+        useWeb: { type: boolean, default: false }
+        systemInstruction: { type: string, maxLength: 1000 }
+    AnswerSnapshotRequest:
+      type: object
+      required: [action, engine, prompt]
+      properties:
+        action: { const: answer_snapshot }
+        engine: { $ref: '#/components/schemas/AnswerEngine' }
+        prompt: { type: string, maxLength: 2000 }
+        targetDomain: { type: string }
+        maximumOutputTokens: { type: integer, minimum: 1, maximum: 2048 }
+    AnswerDemandRequest:
+      type: object
+      required: [action, keywords]
+      description: Always returns 503 INTELLIGENCE_SOURCE_UNAVAILABLE; no public source exists.
+      properties:
+        action: { const: answer_demand }
+        keywords: { type: array, minItems: 1, maxItems: 50, items: { type: string } }
+    PageRequest:
+      type: object
+      required: [action, url]
+      properties:
+        action: { enum: [page_inspection, content_extraction, page_screenshot] }
+        url: { type: string, format: uri, description: 'Public HTTP(S) address; private targets are refused' }
+        browserProfile: { enum: [desktop, mobile, tablet] }
+        renderJavascript: { type: boolean, default: false, description: 'Needs the browser runner; otherwise the HTML result is saved and the run says so' }
+        fullPage: { type: boolean, default: true }
+    SiteCrawlRequest:
+      type: object
+      required: [action, domain, maximumPages]
+      properties:
+        action: { const: site_crawl }
+        domain: { type: string }
+        maximumPages: { type: integer, minimum: 1, maximum: 2000, description: 'Capped per deployment' }
+        startUrl: { type: string, format: uri }
+        extractContent: { type: boolean, default: false }
+    AnswerEngine:
+      enum: [chatgpt, gemini, claude, perplexity]
+    RunEnvelope:
+      type: object
+      required: [run]
+      properties:
+        run: { $ref: '#/components/schemas/Run' }
+    Run:
+      type: object
+      required: [id, capability, action, status, statusMessage, requestedAt, source, progress, coverage, unavailable, error, summary, evidence]
+      properties:
+        id: { type: string }
+        capability: { $ref: '#/components/schemas/Capability' }
+        action: { type: string }
+        status: { enum: [queued, running, partial, complete, failed, cancelled] }
+        statusMessage: { type: string }
+        requestedAt: { type: string, format: date-time }
+        startedAt: { type: [string, 'null'], format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+        request: { type: [object, 'null'] }
+        source: { $ref: '#/components/schemas/Source' }
+        progress:
+          type: object
+          required: [completed, total, updatedAt]
+          properties:
+            completed: { type: integer }
+            total: { type: [integer, 'null'] }
+            updatedAt: { type: string, format: date-time }
+        coverage: { type: [object, 'null'], description: 'SERP runs: complete, partial, blocked, or unparsed' }
+        unavailable:
+          type: array
+          items:
+            type: object
+            required: [metric, reason]
+            properties:
+              metric: { type: string }
+              reason: { type: string }
+        error:
+          type: [object, 'null']
+          properties:
+            code: { type: string }
+            message: { type: string }
+        summary:
+          type: object
+          properties:
+            evidenceCount: { type: integer }
+            keywordCount: { type: integer }
+            resultCount: { type: integer }
+            citationCount: { type: integer }
+            pagesCrawled: { type: [integer, 'null'] }
+            pagesQueued: { type: [integer, 'null'] }
+            unavailableMetricCount: { type: integer }
+        parentRunId: { type: [string, 'null'] }
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/Evidence' }
+    Source:
+      type: object
+      required: [origin, label, method, observedAt, limitations]
+      properties:
+        origin:
+          enum: [search_results_page, search_metrics_api, app_store_api, app_store_page, answer_engine_api, fetched_page, stored_observations, derived_estimate]
+        label: { type: string }
+        method: { type: string, description: 'Collector or analysis version' }
+        observedAt: { type: string, format: date-time }
+        limitations: { type: array, items: { type: string } }
+    Evidence:
+      type: object
+      required: [kind, id, source]
+      properties:
+        kind:
+          enum: [keyword, keyword_trend, domain_ranking, competitor, serp_result, answer, answer_visibility, market_category, app, page]
+        id: { type: string }
+        source: { $ref: '#/components/schemas/Source' }
+      description: Fields depend on kind. Null means the value was not measured; it is never zero by default.

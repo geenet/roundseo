@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8789';
 
-export default function DashboardScreen({ navigation }: any) {
+export default function DashboardScreen({ navigation, onSignOut }: any) {
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -18,7 +18,7 @@ export default function DashboardScreen({ navigation }: any) {
       const response = await fetch(`${API_URL}/api/v2/organizations`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await response.json();
+      const data = await response.json() as { organizations?: Array<{ id: string; name: string }> };
       setOrganizations(data.organizations || []);
     } catch (error) {
       console.error('Failed to load organizations:', error);
@@ -29,7 +29,7 @@ export default function DashboardScreen({ navigation }: any) {
 
   const handleLogout = async () => {
     await SecureStore.deleteItemAsync('authToken');
-    navigation.replace('Login');
+    onSignOut();
   };
 
   if (loading) {

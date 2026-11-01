@@ -61,6 +61,14 @@ export type CrawlCoverage = {
   limitReached: boolean;
   method: 'http' | 'browser';
   scopeNote: string;
+  attemptedUrls?: number;
+  remainingUrls?: number;
+  robotsExcludedUrls?: number;
+  pendingUrls?: string[];
+  sitemapStatus?: 'not_checked' | 'available' | 'unavailable' | 'partial';
+  sitemapFiles?: number;
+  sitemapUrls?: number;
+  discoveryWarnings?: string[];
 };
 
 export type TechnicalHealth = {
@@ -110,6 +118,26 @@ export type PerformanceOpportunity = {
   title: string;
   estimatedSavingsMs: number | null;
   estimatedSavingsBytes: number | null;
+  evidence?: Array<{ url: string; observed: string; recommendation: string }>;
+};
+
+export type PerformanceResource = {
+  url: string;
+  kind: string;
+  status: number;
+  transferredBytes: number | null;
+  durationMs?: number;
+  /** Arrival order observed by the browser for this page load. */
+  sequence?: number;
+  /** Milliseconds after the first recorded request in the page load. */
+  startedAtMs?: number;
+  hostname?: string;
+  initiator?: string;
+  cacheControl?: string;
+  cacheStatus?: string;
+  age?: string;
+  contentEncoding?: string;
+  thirdParty?: boolean;
 };
 
 export type PerformanceDeviceResult = {
@@ -123,17 +151,88 @@ export type PerformanceDeviceResult = {
   opportunities: PerformanceOpportunity[];
   fetchedAt: string;
   error?: string;
+  resources?: PerformanceResource[];
+  /** Earliest observed responses, kept in arrival order rather than by size. */
+  loadSequence?: PerformanceResource[];
+  requests?: number;
+  transferredBytes?: number;
+  profile?: string;
 };
 
 export type PerformanceAudit = {
   targetUrl: string;
-  provider: 'google_pagespeed_insights';
+  provider: 'google_pagespeed_insights' | 'local_browser';
   providerLabel: string;
   availability: Availability;
   fetchedAt: string;
   methodVersion: string;
   devices: PerformanceDeviceResult[];
   error?: string;
+  sourceNote?: string;
+};
+
+/** A same-site link observed in the live landing-page DOM before it was loaded. */
+export type RealUserPageLoadingLink = {
+  url: string;
+  text: string;
+  placement: 'main' | 'header' | 'footer' | 'other';
+};
+
+/** Delivery and caching signals collected from response headers during one page replay. */
+export type RealUserDeliveryHost = {
+  hostname: string;
+  firstParty: boolean;
+  requests: number;
+  transferredBytes: number;
+  cacheControl: string[];
+  cacheStatus: string[];
+  age: string[];
+};
+
+/** Structural browser observations that explain what had to load before a page could render. */
+export type RealUserLoadStructure = {
+  potentialBlockingScripts: Array<{
+    url: string;
+    location: 'head' | 'body';
+    type: string | null;
+    thirdParty: boolean;
+  }>;
+  inlineHeadScriptCount: number;
+  headStylesheets: Array<{
+    url: string;
+    media: string | null;
+    thirdParty: boolean;
+  }>;
+  deliveryHosts: RealUserDeliveryHost[];
+};
+
+/**
+ * A controlled, cold-browser replay of a landing page and real same-site links
+ * found in that landing page. It intentionally stays separate from field/RUM.
+ */
+export type RealUserPageLoadingPage = {
+  url: string;
+  role: 'landing' | 'linked';
+  discoveredFrom?: RealUserPageLoadingLink;
+  availability: Availability;
+  fetchedAt: string;
+  devices: PerformanceDeviceResult[];
+  loadStructure?: RealUserLoadStructure;
+  loadStructureDevice?: PerformanceDevice;
+  error?: string;
+};
+
+export type RealUserPageLoadingAudit = {
+  targetUrl: string;
+  landingUrl: string;
+  availability: Availability;
+  fetchedAt: string;
+  methodVersion: string;
+  requestedLinkedPages: number;
+  eligibleLinkedPages: number;
+  pages: RealUserPageLoadingPage[];
+  error?: string;
+  sourceNote: string;
 };
 
 export type MeasurementDefinition = {
@@ -167,6 +266,14 @@ export const DETERMINISTIC_MEASUREMENT_DEFINITIONS: readonly MeasurementDefiniti
     sourceFamily: 'roundseo_rules',
     aggregationRule: 'passed applicable deterministic check weight divided by evaluated applicable check weight',
   },
+  ...(['ttfb', 'fcp', 'lcp', 'cls', 'tbt'] as const).map(key => ({
+    metricKey: `performance.browser.${key}`,
+    displayLabel: key === 'tbt' ? 'Long-task blocking during the sample' : `Browser sample ${key.toUpperCase()}`,
+    unit: key === 'cls' ? 'ratio' : 'ms',
+    sourceFamily: 'roundseo_browser',
+    aggregationRule: 'Single controlled browser loading sample for the declared device and URL; not real-user data or a Lighthouse score',
+    supportedDimensions: ['device', 'scope', 'target_url'],
+  })),
   {
     metricKey: 'performance.lighthouse.score',
     displayLabel: 'PageSpeed lab performance score',

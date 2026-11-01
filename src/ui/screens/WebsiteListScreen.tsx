@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, FlatList } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, FlatList } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8789';
@@ -19,7 +19,7 @@ export default function WebsiteListScreen({ route, navigation }: any) {
       const response = await fetch(`${API_URL}/api/v2/organizations/${organizationId}/websites`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await response.json();
+      const data = await response.json() as { websites?: Array<{ id: string; name: string; domain: string }> };
       setWebsites(data.websites || []);
     } catch (error) {
       console.error('Failed to load websites:', error);

@@ -296,6 +296,30 @@ Try these sites for testing:
 
 ## Next Steps
 
+### Direct audit URLs
+
+Each completed site audit has focused, refresh-safe routes. For `dadaphone.com`, use:
+
+- `/site/dadaphone.com/overview`
+- `/site/dadaphone.com/audit`
+- `/site/dadaphone.com/pageload`
+- `/site/dadaphone.com/action-plan`
+- `/site/dadaphone.com/pages`
+- `/site/dadaphone.com/changes`
+- `/site/dadaphone.com/data-scope`
+
+Selecting a page adds its exact URL as a `page` query parameter to the Pages route, so a page inspection can also be reopened directly.
+
+### Browser performance tests
+
+New HTTP crawls and queued audit jobs default to a maximum depth of 50, with a 500-URL request budget. The local browser-rendered fallback also allows depth 50 but retains its 30-page budget. Existing reports retain the scope recorded when they ran; run a new audit to use the new settings. Depth is a limit on discovery paths, not a guarantee of full-site coverage or a target page count.
+
+New content comparisons use up to 60,000 characters of extracted main text per page, retaining 900-character excerpts for the report. Similarity uses three-word phrase overlap and is a review signal, not a content-quality verdict. Cross-page findings include conflicting canonical targets, two-page canonical loops, source/anchor evidence for links to noindex pages, and pages without incoming links from the inspected set. Links from uninspected pages remain unknown.
+
+The local Vite app runs its own Chromium performance tests; no Google PageSpeed API key is required. The test uses a simulated mobile profile and a desktop profile, records loading timings and request evidence, and identifies real-user metrics as unavailable. Chromium must be installed for Playwright (`npx playwright install chromium`). Local audit jobs survive a page refresh while the development server is running; restarting that server interrupts them.
+
+The API worker can also call the standalone RoundSEO browser runner. Start it with `ROUNDSEO_RUNNER_TOKEN` set to a secret of at least 24 characters, then run `npm run performance:runner`. It listens on `127.0.0.1:8788` by default. To connect a hosted Worker, expose the runner through an authenticated HTTPS endpoint and configure `ROUNDSEO_PERFORMANCE_RUNNER_URL` to its `/audit` URL and `ROUNDSEO_RUNNER_TOKEN` as a Worker secret. Do not expose the unauthenticated development server. The Worker reports the test as unavailable until a runner is configured.
+
 1. ✅ Setup database & start servers
 2. ✅ Create account & website
 3. ✅ Run first audit

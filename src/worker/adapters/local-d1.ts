@@ -105,7 +105,7 @@ export function createLocalD1(dbPath: string): LocalD1Database {
     },
     dump() {
       try {
-        return db.dump();
+        return db.serialize();
       } catch (e) {
         console.error('D1 dump error:', e);
         return Buffer.alloc(0);

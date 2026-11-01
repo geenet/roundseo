@@ -24,6 +24,7 @@ binding = "R2"
 bucket_name = "roundseo-reports"
 
 # NOTE: Queues are configured per-environment below
+# Intelligence ceilings: INTELLIGENCE_DAILY_REQUEST_LIMIT per website per UTC day, and INTELLIGENCE_MAX_SITE_CRAWL_PAGES per crawl.
 
 # Environments
 [env.production]
@@ -41,15 +42,13 @@ binding = "R2"
 bucket_name = "roundseo-reports"
 
 [env.production.vars]
-JWT_SECRET = "GENERATE_RANDOM_SECRET"
-AUTH_SECRET = "GENERATE_RANDOM_SECRET"
 GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID"
-GOOGLE_CLIENT_SECRET = "YOUR_GOOGLE_CLIENT_SECRET"
 GOOGLE_REDIRECT_URI = "https://api.yourdomain.com/api/v2/auth/google/callback"
-# Store this outside version control with:
-# wrangler secret put GOOGLE_PAGESPEED_API_KEY --env production
+# Set ROUNDSEO_PERFORMANCE_RUNNER_URL and store ROUNDSEO_RUNNER_TOKEN as a secret
+# when connecting a self-hosted browser performance runner.
 API_URL = "https://api.yourdomain.com"
-INTERNAL_TOKEN = "GENERATE_RANDOM_TOKEN"
+INTELLIGENCE_DAILY_REQUEST_LIMIT = "500"
+INTELLIGENCE_MAX_SITE_CRAWL_PAGES = "500"
 
 # Staging environment
 [env.staging]
@@ -67,11 +66,11 @@ binding = "R2"
 bucket_name = "roundseo-reports-staging"
 
 [env.staging.vars]
-JWT_SECRET = "STAGING_SECRET"
 GOOGLE_CLIENT_ID = "YOUR_STAGING_CLIENT_ID"
-GOOGLE_CLIENT_SECRET = "YOUR_STAGING_SECRET"
 GOOGLE_REDIRECT_URI = "https://staging-api.yourdomain.com/api/v2/auth/google/callback"
 API_URL = "https://staging-api.yourdomain.com"
+INTELLIGENCE_DAILY_REQUEST_LIMIT = "500"
+INTELLIGENCE_MAX_SITE_CRAWL_PAGES = "500"
 
 # Local Development (for `wrangler dev --local`)
 [env.development]
@@ -90,6 +89,8 @@ bucket_name = "roundseo-reports-dev"
 [env.development.vars]
 JWT_SECRET = "dev-secret-key-12345-change-in-production"
 GOOGLE_CLIENT_ID = "test-client-id"
+INTELLIGENCE_DAILY_REQUEST_LIMIT = "500"
+INTELLIGENCE_MAX_SITE_CRAWL_PAGES = "500"
 GOOGLE_CLIENT_SECRET = "test-client-secret"
 GOOGLE_REDIRECT_URI = "http://localhost:8787/api/v2/auth/google/callback"
 API_URL = "http://localhost:8787"
@@ -97,7 +98,5 @@ INTERNAL_TOKEN = "test-internal-token"
 DATABASE_URL = ".local/roundseo-dev.db"
 NODE_ENV = "development"
 
-# Migrations
-[[migrations]]
-tag = "v1"
-new = ["001_initial_schema", "002_crawl_schema", "003_keywords_schema", "004_reports_schema", "005_audit_evidence_schema", "006_operating_workflow_schema", "007_finding_evidence", "008_performance_audits"]
+# D1 SQL migrations are read from migrations/. Durable Object migrations belong
+# here only when a configured Durable Object class is introduced.

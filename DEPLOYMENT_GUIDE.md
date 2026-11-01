@@ -109,6 +109,10 @@ wrangler d1 execute roundseo-prod --file=migrations/005_audit_evidence_schema.sq
 wrangler d1 execute roundseo-prod --file=migrations/006_operating_workflow_schema.sql
 wrangler d1 execute roundseo-prod --file=migrations/007_finding_evidence.sql
 wrangler d1 execute roundseo-prod --file=migrations/008_performance_audits.sql
+# 009 is the historical run-ledger table. Keep its file name so deployed migration history matches.
+wrangler d1 execute roundseo-prod --file=migrations/009_dataforseo_runs.sql
+wrangler d1 execute roundseo-prod --file=migrations/010_intelligence_platform.sql
+wrangler d1 execute roundseo-prod --file=migrations/011_native_intelligence.sql
 ```
 
 ### 3.2 Verify Migrations
@@ -136,14 +140,12 @@ From Google Cloud Console:
 - Copy Client ID → `GOOGLE_CLIENT_ID`
 - Copy Client Secret → `GOOGLE_CLIENT_SECRET`
 
-### 4.3 Create Google PageSpeed API Key
+### 4.3 Connect the RoundSEO browser runner
 
-1. Enable PageSpeed Insights API
-2. Create API key
-3. Store it as a Worker secret, never in `wrangler.toml`:
+Run `npm run performance:runner` on a host with Chromium and set a strong `ROUNDSEO_RUNNER_TOKEN` on that host. Expose its `/audit` endpoint over HTTPS, configure `ROUNDSEO_PERFORMANCE_RUNNER_URL` on the Worker, and store the same token as a Worker secret:
 
 ```bash
-wrangler secret put GOOGLE_PAGESPEED_API_KEY --env production
+wrangler secret put ROUNDSEO_RUNNER_TOKEN --env production
 ```
 
 ## Step 5: Build & Deploy

@@ -18,19 +18,19 @@ export interface KeywordRanking {
   keywordId: string;
   websiteId: string;
   rank: number;
-  positionChange: number;
-  trafficEstimate: number;
+  positionChange: number | null;
+  trafficEstimate: number | null;
   checkedAt: string;
 }
 
 export interface KeywordTrend {
   keyword: string;
-  currentRank: number;
-  previousRank: number;
-  change: number;
-  trend: 'up' | 'down' | 'stable';
+  currentRank: number | null;
+  previousRank: number | null;
+  change: number | null;
+  trend: 'up' | 'down' | 'stable' | 'unknown';
   searchVolume: number;
-  traffic: number;
+  traffic: number | null;
 }
 
 export async function trackKeyword(
@@ -78,7 +78,7 @@ export async function recordRanking(
   keywordId: string,
   websiteId: string,
   rank: number,
-  trafficEstimate = 0
+  trafficEstimate: number | null = null
 ): Promise<KeywordRanking> {
   const id = `rank_${nanoid(16)}`;
   const now = new Date().toISOString();
@@ -88,7 +88,7 @@ export async function recordRanking(
     'SELECT rank FROM keyword_rankings WHERE keyword_id = ? ORDER BY checked_at DESC LIMIT 1'
   ).bind(keywordId).first();
 
-  const positionChange = previousRanking ? previousRanking.rank - rank : 0;
+  const positionChange = previousRanking ? previousRanking.rank - rank : null;
 
   await db.prepare(`
     INSERT INTO keyword_rankings (id, keyword_id, website_id, rank, position_change, traffic_estimate, checked_at)
@@ -116,11 +116,11 @@ export async function getKeywordTrends(db: any, websiteId: string): Promise<Keyw
     ORDER BY k.search_volume DESC LIMIT 50
   `).bind(websiteId).all();
 
-  return keywords.results.map(k => {
-    const currentRank = k.current_rank || 0;
-    const previousRank = k.previous_rank || k.current_rank || 0;
-    const change = previousRank - currentRank;
-    const trend = change > 0 ? 'up' : change < 0 ? 'down' : 'stable';
+  return keywords.results.map((k: { keyword: string; current_rank: number | null; previous_rank: number | null; search_volume: number }) => {
+    const currentRank = k.current_rank ?? null;
+    const previousRank = k.previous_rank ?? null;
+    const change = previousRank !== null && currentRank !== null ? previousRank - currentRank : null;
+    const trend = change === null ? 'unknown' : change > 0 ? 'up' : change < 0 ? 'down' : 'stable';
 
     return {
       keyword: k.keyword,
@@ -129,7 +129,7 @@ export async function getKeywordTrends(db: any, websiteId: string): Promise<Keyw
       change,
       trend,
       searchVolume: k.search_volume,
-      traffic: estimateTraffic(currentRank, k.search_volume),
+      traffic: null,
     };
   });
 }
@@ -166,23 +166,4 @@ function mapKeywordRow(row: any): TrackedKeyword {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function estimateTraffic(rank: number, searchVolume: number): number {
-  // Rough CTR estimation based on Google data
-  const ctrByRank: Record<number, number> = {
-    1: 0.28,
-    2: 0.15,
-    3: 0.10,
-    4: 0.08,
-    5: 0.07,
-    6: 0.05,
-    7: 0.04,
-    8: 0.03,
-    9: 0.02,
-    10: 0.02,
-  };
-
-  const ctr = ctrByRank[Math.min(rank, 10)] || 0.01;
-  return Math.round(searchVolume * ctr * 0.3); // Rough estimate
 }

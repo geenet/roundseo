@@ -1,20 +1,11 @@
 // Main auth handler for RoundSEO
-import { createToken, verifyToken } from './jwt';
+import { createToken, type AuthEnvironment } from './jwt';
 import { hashPassword, verifyPassword, validatePassword } from './password';
 import { requireAuth, validateEmail } from './middleware';
-import { getGoogleOAuthConfig, getGoogleAuthUrl, exchangeGoogleCode, getGoogleUserInfo, createGoogleAuthToken } from './google';
+import { getGoogleOAuthConfig, getGoogleAuthUrl, exchangeGoogleCode, getGoogleUserInfo } from './google';
 
 export { requireAuth, validateEmail } from './middleware';
 export type { AuthContext } from './middleware';
-
-interface User {
-  id: string;
-  email: string;
-  name: string;
-  authMethod: string;
-  emailVerified: boolean;
-  createdAt: string;
-}
 
 interface SignupRequest {
   email: string;
@@ -32,9 +23,13 @@ interface GoogleCallbackRequest {
   state: string;
 }
 
-export async function handleSignup(request: Request, db: any): Promise<Response> {
+export async function handleSignup(request: Request, db: any, env: AuthEnvironment): Promise<Response> {
   try {
-    const { email, name, password } = (await request.json()) as SignupRequest;
+    const input = (await request.json()) as SignupRequest;
+    const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
+    const name = typeof input.name === 'string' ? input.name.trim() : '';
+    const password = input.password;
+    if (!env.JWT_SECRET) return new Response(JSON.stringify({ error: 'Authentication is not configured' }), { status: 503 });
 
     // Validate inputs
     if (!validateEmail(email)) {
@@ -67,7 +62,7 @@ export async function handleSignup(request: Request, db: any): Promise<Response>
     `).bind(userId, email, name, 'email_password', passwordHash, false, now, now).run();
 
     // Create auth token
-    const token = await createToken({ userId, email }, '7d');
+    const token = await createToken({ userId, email }, env.JWT_SECRET);
 
     return new Response(JSON.stringify({ user: { id: userId, email, name }, token }), {
       status: 201,
@@ -79,9 +74,13 @@ export async function handleSignup(request: Request, db: any): Promise<Response>
   }
 }
 
-export async function handleLogin(request: Request, db: any): Promise<Response> {
+export async function handleLogin(request: Request, db: any, env: AuthEnvironment): Promise<Response> {
   try {
-    const { email, password } = (await request.json()) as LoginRequest;
+    const input = (await request.json()) as LoginRequest;
+    const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
+    const password = input.password;
+    if (!env.JWT_SECRET) return new Response(JSON.stringify({ error: 'Authentication is not configured' }), { status: 503 });
+    if (!validateEmail(email) || typeof password !== 'string') return new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401 });
 
     // Find user
     const user = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
@@ -95,8 +94,12 @@ export async function handleLogin(request: Request, db: any): Promise<Response> 
       return new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401 });
     }
 
+    if (!user.password_hash.startsWith('pbkdf2$')) {
+      await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(await hashPassword(password), user.id).run();
+    }
+
     // Create auth token
-    const token = await createToken({ userId: user.id, email: user.email }, '7d');
+    const token = await createToken({ userId: user.id, email: user.email }, env.JWT_SECRET);
 
     // Update last login
     await db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?')
@@ -112,16 +115,32 @@ export async function handleLogin(request: Request, db: any): Promise<Response> 
   }
 }
 
+export function handleGoogleStart(request: Request, env: any): Response {
+  const config = getGoogleOAuthConfig(env);
+  if (!env.JWT_SECRET || !config.clientId || !config.clientSecret || !config.redirectUri) return new Response(JSON.stringify({ error: 'Google sign-in is not configured' }), { status: 503 });
+  const state = crypto.randomUUID();
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: getGoogleAuthUrl(config.clientId, config.redirectUri, state),
+      'Set-Cookie': `roundseo_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/api/v2/auth/google; Max-Age=600${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`,
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
 export async function handleGoogleCallback(request: Request, env: any, db: any): Promise<Response> {
   try {
-    const { code, state } = (await request.json()) as GoogleCallbackRequest;
+    const { code, state } = request.method === 'GET' ? Object.fromEntries(new URL(request.url).searchParams) : (await request.json()) as GoogleCallbackRequest;
 
-    if (!code || !state) {
+    if (typeof code !== 'string' || typeof state !== 'string' || !code || !state) {
       return new Response(JSON.stringify({ error: 'Missing code or state' }), { status: 400 });
     }
 
-    // Verify state from session (in production, check against stored state)
-    // For now, we'll skip this
+    const stateCookie = request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith('roundseo_oauth_state='))?.slice('roundseo_oauth_state='.length);
+    if (!stateCookie || stateCookie !== state) {
+      return new Response(JSON.stringify({ error: 'OAuth session expired. Start Google sign-in again.' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }
 
     const config = getGoogleOAuthConfig(env);
     const tokenResponse = await exchangeGoogleCode(code, config);
@@ -130,12 +149,19 @@ export async function handleGoogleCallback(request: Request, env: any, db: any):
     }
 
     const googleUser = await getGoogleUserInfo(tokenResponse.access_token);
-    if (!googleUser) {
+    if (!googleUser || !googleUser.email_verified) {
       return new Response(JSON.stringify({ error: 'Failed to get user info' }), { status: 400 });
     }
 
     // Check if user exists
     let user = await db.prepare('SELECT * FROM users WHERE google_id = ?').bind(googleUser.sub).first();
+
+    if (!user) {
+      const existing = await db.prepare('SELECT * FROM users WHERE email = ?').bind(googleUser.email.toLowerCase()).first();
+      if (existing) {
+        return new Response(JSON.stringify({ error: 'This email already has an account. Use its existing sign-in method.' }), { status: 409 });
+      }
+    }
 
     if (!user) {
       // Create new user
@@ -151,10 +177,10 @@ export async function handleGoogleCallback(request: Request, env: any, db: any):
     }
 
     // Create auth token
-    const token = await createGoogleAuthToken(googleUser);
+    const token = await createToken({ userId: user.id, email: user.email }, env.JWT_SECRET);
 
-    return new Response(JSON.stringify({ user, token }), {
-      headers: { 'Content-Type': 'application/json' },
+    return new Response(JSON.stringify({ user: { id: user.id, email: user.email, name: user.name }, token }), {
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Set-Cookie': 'roundseo_oauth_state=; HttpOnly; SameSite=Lax; Path=/api/v2/auth/google; Max-Age=0' },
     });
   } catch (error) {
     console.error('Google callback error:', error);
@@ -162,8 +188,8 @@ export async function handleGoogleCallback(request: Request, env: any, db: any):
   }
 }
 
-export async function handleGetMe(request: Request): Promise<Response> {
-  const { auth, error } = await requireAuth(request);
+export async function handleGetMe(request: Request, env: AuthEnvironment): Promise<Response> {
+  const { auth, error } = await requireAuth(request, env);
   if (error || !auth) {
     return new Response(JSON.stringify({ error }), { status: 401 });
   }
@@ -173,15 +199,15 @@ export async function handleGetMe(request: Request): Promise<Response> {
   });
 }
 
-export async function handleRefresh(request: Request): Promise<Response> {
-  const { auth, error } = await requireAuth(request);
+export async function handleRefresh(request: Request, env: AuthEnvironment): Promise<Response> {
+  const { auth, error } = await requireAuth(request, env);
   if (error || !auth) {
     return new Response(JSON.stringify({ error }), { status: 401 });
   }
 
   const newToken = await createToken(
     { userId: auth.userId, email: auth.email, organizationId: auth.organizationId },
-    '7d'
+    env.JWT_SECRET
   );
 
   return new Response(JSON.stringify({ token: newToken }), {

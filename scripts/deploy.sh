@@ -81,8 +81,8 @@ echo -e "${YELLOW}🚀 Deploying to Cloudflare...${NC}"
 wrangler deploy --env $ENV
 
 echo -e "${GREEN}✓ Deployment successful${NC}\n"
-echo "For PageSpeed audits, set the provider key once with:"
-echo "wrangler secret put GOOGLE_PAGESPEED_API_KEY --env $ENV"
+echo "For browser performance audits, configure ROUNDSEO_PERFORMANCE_RUNNER_URL"
+echo "and store the runner token with: wrangler secret put ROUNDSEO_RUNNER_TOKEN --env $ENV"
 echo ""
 
 # Run migrations
@@ -97,6 +97,9 @@ echo "wrangler d1 execute roundseo --env $ENV --file=migrations/005_audit_eviden
 echo "wrangler d1 execute roundseo --env $ENV --file=migrations/006_operating_workflow_schema.sql"
 echo "wrangler d1 execute roundseo --env $ENV --file=migrations/007_finding_evidence.sql"
 echo "wrangler d1 execute roundseo --env $ENV --file=migrations/008_performance_audits.sql"
+echo "wrangler d1 execute roundseo --env $ENV --file=migrations/009_dataforseo_runs.sql"
+echo "wrangler d1 execute roundseo --env $ENV --file=migrations/010_intelligence_platform.sql"
+echo "wrangler d1 execute roundseo --env $ENV --file=migrations/011_native_intelligence.sql  # run once: adds columns with ALTER TABLE"
 echo ""
 
 # Verify deployment

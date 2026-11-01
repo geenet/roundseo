@@ -19,10 +19,12 @@ type PerformanceObservationContext = {
   device: string;
   fetchedAt: string;
   methodVersion: string;
+  provider: PerformanceAudit['provider'];
+  providerLabel: string;
 };
 
 /**
- * Persists a PageSpeed run as its own evidence bundle. It deliberately does
+ * Persists a browser performance run as its own evidence bundle. It deliberately does
  * not update crawl health or crawl findings: a synthetic lab run and a site
  * crawl answer different questions and carry different evidence labels.
  */
@@ -57,7 +59,7 @@ export async function persistPerformanceAudit(db: Database, input: PersistPerfor
     report.methodVersion,
     report.fetchedAt,
     report.error || null,
-    JSON.stringify({ providerLabel: report.providerLabel, devices: report.devices.map(device => ({ device: device.device, availability: device.availability, fieldDataScope: device.fieldDataScope })) }),
+    JSON.stringify({ providerLabel: report.providerLabel, sourceNote: report.sourceNote, devices: report.devices.map(device => ({ device: device.device, availability: device.availability, fieldDataScope: device.fieldDataScope, resources: device.resources, requests: device.requests, transferredBytes: device.transferredBytes, profile: device.profile })) }),
     report.fetchedAt,
     report.fetchedAt,
   ).run();
@@ -68,16 +70,15 @@ export async function persistPerformanceAudit(db: Database, input: PersistPerfor
     await persistDeviceObservations(db, auditId, websiteId, performanceAuditId, report, device);
   }
 
-  // Provider opportunities become normal actions only when they carry a
-  // measurable saving. Each record retains the precise target URL and device
-  // instead of becoming a vague, site-wide "speed" recommendation.
+  // Persist measured resource evidence and provider-reported savings without
+  // inventing a saving for a browser observation.
   await persistFindingsAndActions(
     db,
     auditId,
     websiteId,
     buildPageSpeedFindings(report),
     report.availability,
-    'pagespeed_insights',
+    report.provider === 'local_browser' ? 'browser_performance' : 'pagespeed_insights',
     report.fetchedAt,
   );
 
@@ -95,7 +96,7 @@ export async function persistPerformanceAudit(db: Database, input: PersistPerfor
       completed_at = excluded.completed_at
   `).bind(
     auditId,
-    'pagespeed_insights',
+    report.provider === 'local_browser' ? 'browser_performance' : 'pagespeed_insights',
     'sampled',
     report.availability,
     report.methodVersion,
@@ -108,9 +109,8 @@ export async function persistPerformanceAudit(db: Database, input: PersistPerfor
 }
 
 /**
- * Converts quantified PageSpeed opportunities into durable action evidence.
- * This is deliberately a pure mapper: no unquantified audit hint, unavailable
- * provider response, or zero-value opportunity can create a false action.
+ * Converts measured browser evidence or quantified historical provider
+ * opportunities into durable actions.
  */
 export function buildPageSpeedFindings(report: PerformanceAudit): AuditFinding[] {
   const grouped = new Map<string, {
@@ -125,7 +125,7 @@ export function buildPageSpeedFindings(report: PerformanceAudit): AuditFinding[]
     for (const opportunity of device.opportunities) {
       const savingsMs = opportunity.estimatedSavingsMs || 0;
       const savingsBytes = opportunity.estimatedSavingsBytes || 0;
-      if (savingsMs <= 0 && savingsBytes <= 0) continue;
+      if (savingsMs <= 0 && savingsBytes <= 0 && !opportunity.evidence?.length) continue;
       const ruleId = `performance.pagespeed.${slug(opportunity.key)}`;
       const current = grouped.get(ruleId) || {
         title: opportunity.title,
@@ -135,12 +135,8 @@ export function buildPageSpeedFindings(report: PerformanceAudit): AuditFinding[]
       };
       current.largestSavingsMs = Math.max(current.largestSavingsMs, savingsMs);
       current.largestSavingsBytes = Math.max(current.largestSavingsBytes, savingsBytes);
-      current.evidence.push({
-        url: report.targetUrl,
-        element: `${presentDevice(device.device)} PageSpeed lab opportunity`,
-        observed: pageSpeedSavingsSummary(savingsMs, savingsBytes),
-        recommendation: `Review ${opportunity.title.toLowerCase()} for this exact URL on ${presentDevice(device.device).toLowerCase()}; make the smallest appropriate change, then rerun the comparable PageSpeed check.`,
-      });
+      if (opportunity.evidence?.length) current.evidence.push(...opportunity.evidence.map(item => ({ url: report.targetUrl, element: `${presentDevice(device.device)} browser observation`, observed: `${item.url}: ${item.observed}`, recommendation: item.recommendation, relatedUrls: item.url === report.targetUrl ? undefined : [item.url] })));
+      else current.evidence.push({ url: report.targetUrl, element: `${presentDevice(device.device)} PageSpeed lab opportunity`, observed: pageSpeedSavingsSummary(savingsMs, savingsBytes), recommendation: `Review ${opportunity.title.toLowerCase()} for this exact URL on ${presentDevice(device.device).toLowerCase()}; then rerun the comparable test.` });
       grouped.set(ruleId, current);
     }
   }
@@ -150,14 +146,14 @@ export function buildPageSpeedFindings(report: PerformanceAudit): AuditFinding[]
     .slice(0, 8)
     .map(([ruleId, finding]) => ({
       category: 'technical',
-      priority: pageSpeedPriority(finding.largestSavingsMs, finding.largestSavingsBytes),
+      priority: finding.largestSavingsMs || finding.largestSavingsBytes ? pageSpeedPriority(finding.largestSavingsMs, finding.largestSavingsBytes) : 'medium',
       ruleId,
       ruleVersion: report.methodVersion,
       evidenceKind: 'sampled',
       availability: report.availability,
       confidence: 'high',
-      title: `PageSpeed: ${finding.title}`,
-      description: `Google PageSpeed Insights identified a quantified lab opportunity on the declared target URL. It applies only to the device evidence shown below, not automatically to every page on the site.`,
+      title: report.provider === 'local_browser' ? `Performance: ${finding.title}` : `PageSpeed: ${finding.title}`,
+      description: report.provider === 'local_browser' ? 'RoundSEO observed these resources or timings on the declared page and device; each recommendation needs review.' : 'Google PageSpeed Insights identified a quantified lab opportunity on the declared target URL and device.',
       impact: `Reducing this avoidable work can improve the measured loading experience for visitors of ${report.targetUrl}.`,
       effort: pageSpeedEffort(ruleId),
       evidence: finding.evidence,
@@ -195,16 +191,17 @@ async function hydratePerformanceAudit(db: Database, row: any): Promise<Performa
     WHERE performance_audit_id = ?
     ORDER BY CASE device WHEN 'mobile' THEN 0 ELSE 1 END
   `).bind(row.id).all();
-  const sourceEvidence = parseJson(row.source_evidence_json, {} as { providerLabel?: string });
+  const sourceEvidence = parseJson(row.source_evidence_json, {} as { providerLabel?: string; sourceNote?: string; devices?: PerformanceDeviceResult[] });
   return {
     targetUrl: String(row.target_url),
-    provider: 'google_pagespeed_insights',
+    provider: row.provider === 'local_browser' ? 'local_browser' : 'google_pagespeed_insights',
     providerLabel: sourceEvidence.providerLabel || 'Google PageSpeed Insights',
     availability: row.availability,
     fetchedAt: String(row.fetched_at),
     methodVersion: String(row.method_version),
-    devices: (devices.results || []).map(mapDeviceRow),
+    devices: (devices.results || []).map((deviceRow: any) => ({ ...mapDeviceRow(deviceRow), ...((sourceEvidence.devices || []).find(device => device.device === deviceRow.device) || {}) })),
     error: row.error_message || undefined,
+    sourceNote: sourceEvidence.sourceNote,
   };
 }
 
@@ -247,6 +244,8 @@ async function persistDeviceObservations(
     device: device.device,
     fetchedAt: device.fetchedAt,
     methodVersion: report.methodVersion,
+    provider: report.provider,
+    providerLabel: report.providerLabel,
   };
   if (device.labScore !== null) {
     await persistObservation(db, {
@@ -261,7 +260,7 @@ async function persistDeviceObservations(
     });
   }
   for (const metric of device.labMetrics) {
-    await persistMetric(db, common, metric, device.availability, 'sampled', 'lighthouse_lab');
+    await persistMetric(db, common, metric, device.availability, 'sampled', report.provider === 'local_browser' ? 'browser_sample' : 'lighthouse_lab');
   }
   for (const metric of device.fieldMetrics) {
     await persistMetric(db, common, metric, device.fieldDataAvailability, 'provider_reported', 'crux_p75', device.fieldDataScope);
@@ -277,7 +276,7 @@ async function persistMetric(
   statistic: string,
   fieldScope?: string,
 ): Promise<void> {
-  const metricKey = `performance.${metric.source === 'field' ? 'field' : 'lighthouse'}.${metric.key}`;
+  const metricKey = `performance.${metric.source === 'field' ? 'field' : common.provider === 'local_browser' ? 'browser' : 'lighthouse'}.${metric.key}`;
   await persistObservation(db, {
     ...common,
     metricKey,
@@ -305,6 +304,8 @@ async function persistObservation(db: Database, observation: {
   evidenceKind: string;
   statistic: string;
   scope: string;
+  provider: PerformanceAudit['provider'];
+  providerLabel: string;
 }): Promise<void> {
   await db.prepare(`
     INSERT INTO metric_observations (
@@ -323,7 +324,7 @@ async function persistObservation(db: Database, observation: {
     observation.unit,
     observation.statistic,
     JSON.stringify({ device: observation.device, scope: observation.scope, target_url: observation.targetUrl }),
-    'Google PageSpeed Insights',
+    observation.providerLabel,
     observation.evidenceKind,
     observation.availability,
     observation.fetchedAt,

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/worker/crawlers/base.ts",
+    "src/worker/crawlers/parser.ts",
+    "src/worker/crawlers/metrics.ts",
+    "src/worker/crawlers/assurance/**/*.ts",
+    "src/shared/operating-model.ts",
+    "src/ui/App.tsx",
+    "tests/unit/assurance.test.ts",
+    "tests/unit/audit-rigor.test.ts"
+  ]
+}

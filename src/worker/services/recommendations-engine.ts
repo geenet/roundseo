@@ -41,7 +41,7 @@ export async function generateSmartRecommendations(
   const prioritized = recommendations_list
     .map(rec => ({
       ...rec,
-      impactScore: calculateImpactScore(rec, metrics),
+      impactScore: calculateImpactScore(rec),
     }))
     .sort((a, b) => b.impactScore.priority - a.impactScore.priority);
 
@@ -244,7 +244,7 @@ function buildRecommendationsList(metrics: any, auditId: string, websiteId: stri
   return recs;
 }
 
-function calculateImpactScore(rec: Omit<Recommendation, 'id' | 'createdAt' | 'isFixed' | 'fixedAt'>, metrics: any): ImpactScore {
+function calculateImpactScore(rec: Omit<Recommendation, 'id' | 'createdAt' | 'isFixed' | 'fixedAt'>): ImpactScore {
   // Base traffic impact by category and priority
   const baseImpact: Record<string, Record<string, number>> = {
     'onpage': { 'critical': 30, 'high': 20, 'medium': 10, 'low': 5 },

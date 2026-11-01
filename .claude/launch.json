@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "roundseo-api",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev", "--env", "development", "--port", "8789", "--ip", "127.0.0.1"],
+      "port": 8789
+    },
+    {
+      "name": "roundseo-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5175
+    },
+    {
+      "name": "roundseo-runner",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "set -a; . ./.dev.vars; set +a; npx esbuild src/local/performance-runner-server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/performance-runner.mjs && node dist/performance-runner.mjs"],
+      "port": 8788
+    }
+  ]
+}

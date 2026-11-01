@@ -167,7 +167,7 @@ export class PerformanceMonitor {
     return this.metrics;
   }
 
-  recordDatabaseQuery(query: string, duration: number, params?: any[]): void {
+  recordDatabaseQuery(query: string, duration: number, _params?: unknown[]): void {
     if (duration > 500) {
       logger.warn('Slow database query', {
         query: query.substring(0, 50),
@@ -247,7 +247,7 @@ export class HealthCheck {
 
   async checkR2(r2: any): Promise<boolean> {
     try {
-      // Test R2 connectivity
+      await r2.list({ limit: 1 });
       this.lastR2Check = { status: 'healthy', timestamp: new Date().toISOString() };
       return true;
     } catch (error) {

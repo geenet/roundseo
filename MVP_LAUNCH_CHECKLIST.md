@@ -42,8 +42,7 @@ wrangler d1 execute roundseo-local --local --file=migrations/008_performance_aud
 # Copy .env.example to .env
 cp .env.example .env
 
-# For local dev, set placeholder values:
-echo "GOOGLE_PAGESPEED_API_KEY=test-key-local" >> .env
+# Local browser performance tests do not need a PageSpeed API key.
 ```
 
 **4. Update wrangler.toml for local dev**
@@ -298,7 +297,7 @@ npm run dev:ui
 ### Prerequisites
 - [ ] All tests passing
 - [ ] No console errors/warnings
-- [ ] Wrangler secret set: `wrangler secret put GOOGLE_PAGESPEED_API_KEY`
+- [ ] If using hosted performance tests, configure the RoundSEO browser runner URL and secret.
 - [ ] Domain configured in Cloudflare DNS
 
 ### Deploy to Production

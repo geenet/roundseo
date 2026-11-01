@@ -35,6 +35,7 @@ export async function getWebsiteOperatingOverview(db: Database, websiteId: strin
   return {
     latestAudit: audit,
     auditMetadata: metadata,
+    assurance: readAssurance(metadata?.crawl_scope_json),
     measurements: metrics.results || [],
     actions,
     changes: changes.results || [],
@@ -70,11 +71,11 @@ function sourceStatuses(connectors: any[], performance: any): Array<{ key: strin
         label: 'Visitor performance',
         availability: performance.availability as Availability,
         detail: performance.availability === 'measured' || performance.availability === 'partial'
-          ? `Google PageSpeed Insights measured ${performance.devices?.map((device: any) => device.device).join(' and ') || 'the requested'} device view${performance.devices?.length === 1 ? '' : 's'} for ${performance.targetUrl}. Lab results and real-user data remain separate.`
-          : performance.error || 'The latest PageSpeed audit did not return usable evidence.',
+          ? `${performance.providerLabel || 'RoundSEO browser test'} measured ${performance.devices?.map((device: any) => device.device).join(' and ') || 'the requested'} device view${performance.devices?.length === 1 ? '' : 's'} for ${performance.targetUrl}. Browser samples and real-user data remain separate.`
+          : performance.error || 'The latest browser performance audit did not return usable evidence.',
         lastSyncedAt: performance.fetchedAt,
       }
-      : sourceStatus(byProvider.get('pagespeed') || byProvider.get('crux'), 'performance', 'Visitor performance', 'Run a PageSpeed audit to record mobile and desktop lab performance; available Chrome UX field data is retained separately.'),
+      : sourceStatus(undefined, 'performance', 'Visitor performance', 'Run a RoundSEO browser audit for mobile and desktop loading measurements.'),
   ];
 }
 
@@ -87,4 +88,9 @@ function sourceStatus(connector: any, key: string, label: string, fallback: stri
     detail: connector.selected_property ? `Connected to ${connector.selected_property}` : fallback,
     lastSyncedAt: connector.last_successful_sync_at || undefined,
   };
+}
+
+function readAssurance(scopeJson?: string): unknown {
+  if (!scopeJson) return null;
+  try { return JSON.parse(scopeJson).assurance || null; } catch { return null; }
 }

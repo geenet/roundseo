@@ -1,0 +1,22 @@
+{
+  "metric": "Executable control breadth in the explicit coverage ledger",
+  "baseline": {
+    "version": "technical-health-2026.10.5",
+    "controls": 5,
+    "ids": [
+      "access.http",
+      "access.indexing",
+      "canonical.present",
+      "metadata.viewport",
+      "international.language"
+    ]
+  },
+  "current": {
+    "version": "agency-controls-1",
+    "controls": 50,
+    "verifiedTargetedCases": 50,
+    "negativeControls": 50
+  },
+  "ratio": 10,
+  "claim": "10x the explicitly tracked control dimensions of the previous five-check health aggregate. This is not a 10x defect-detection, ranking, traffic, or overall SEO quality claim."
+}

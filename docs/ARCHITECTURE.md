@@ -71,6 +71,33 @@ Database updated
 Email notification sent to team
 ```
 
+### Search Intelligence Run
+```
+RoundSEO client posts an action to /api/v2/websites/:id/intelligence/runs
+  ↓
+Worker authenticates the user, checks the website role and the daily request ceiling
+  ↓
+Request is validated; domains are pinned to the website; unavailable actions are refused
+  ↓
+Single-shot actions collect and analyze inline (SERP, keywords, apps, answers, pages)
+Site crawls are queued as durable jobs under a lease, one batch per message
+  ↓
+Observations, metrics, assets, and evidence are persisted in D1 under the website
+  ↓
+Clients read durable history, coverage, and evidence through RoundSEO endpoints
+```
+
+Collectors live in `src/worker/intelligence/`: SERP parsing, Google Ads keyword
+metrics, Apple and Google Play store clients, answer-engine adapters, and page
+inspection. The browser runner (`src/local/browser-capture.ts`) renders pages
+and captures screenshots when it is configured.
+```
+
+The public boundary is provider-neutral. External operation names, credentials,
+and task identifiers remain behind the Worker boundary; a client refreshes an
+asynchronous crawl with the RoundSEO run ID. The RoundSEO action family and
+checked time are retained on evidence as public provenance.
+
 ## Security Architecture
 
 ### Authentication
@@ -107,7 +134,33 @@ Email notification sent to team
 - **Pagination**: Limit result set sizes
 - **Lazy Loading**: Load reports on demand
 
+### Intelligence persistence
+- **Run ledger**: `intelligence_runs` stores the request, lifecycle, lease,
+  progress, coverage, and the metrics that were unavailable.
+- **Evidence ledger**: `intelligence_evidence` stores keyword, market, app,
+  SERP, answer visibility, competitor, trend, and page evidence.
+- **Observation datasets**: `intelligence_observations` keeps every SERP
+  position collected, so domain rankings and overlap accumulate over time.
+  `intelligence_keyword_metrics` keeps source-reported volume and CPC history.
+- **Crawl frontier**: `intelligence_crawl_pages` tracks each page of a site
+  crawl, so an interrupted job resumes without refetching completed pages.
+- **Assets and limits**: `intelligence_assets` maps screenshots to R2 objects;
+  `intelligence_request_windows` enforces the daily live-request ceiling.
+- **Website isolation**: Reads, refreshes, cancellation, idempotency, assets,
+  and analysis are all scoped by website.
+
 ## Integration Points
+
+### Collection sources
+- **SERP**: Search pages are fetched directly, or rendered by the browser runner
+  when it is configured. Blocked or CAPTCHA pages are reported, never bypassed.
+- **Keyword metrics**: Google Ads Keyword Plan, when its developer token and
+  OAuth credentials are configured. Bing metrics are unavailable until a
+  Microsoft Advertising source is configured.
+- **Apps**: Apple's public iTunes API and Google Play's public store pages.
+- **Answer engines**: Each vendor's official API, enabled per key (Anthropic,
+  OpenAI, Gemini, Perplexity).
+- **Pages**: Native fetch and parsing; screenshots and rendering through the runner.
 
 ### Third-Party APIs (Future Phases)
 - **Google Search Console**: Rankings and click data

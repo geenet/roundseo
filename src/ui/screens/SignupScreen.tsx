@@ -1,5 +1,5 @@
 // Signup Screen
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import * as SecureStore from 'expo-secure-store';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8789';
 
-export default function SignupScreen({ navigation }: any) {
+export default function SignupScreen({ navigation, onAuthenticated }: any) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -34,15 +34,15 @@ export default function SignupScreen({ navigation }: any) {
         body: JSON.stringify({ name, email, password }),
       });
 
-      const data = await response.json();
+      const data = await response.json() as { token?: string; error?: string };
 
-      if (!response.ok) {
+      if (!response.ok || !data.token) {
         Alert.alert('Signup Failed', data.error || 'Failed to create account');
         return;
       }
 
       await SecureStore.setItemAsync('authToken', data.token);
-      navigation.replace('Dashboard');
+      onAuthenticated(data.token);
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Signup failed');
     } finally {

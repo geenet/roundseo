@@ -4,6 +4,24 @@
 
 ---
 
+## Local sign-in and test data
+
+With the Worker API running on port 8789 (`npx wrangler dev --env development --port 8789`) and
+the migrations applied, create the local development account, organization, and test websites:
+
+```bash
+node scripts/seed-local-dev.mjs
+```
+
+The script is idempotent and writes no secrets to disk. Its local-only credential is defined in
+`scripts/seed-local-dev.mjs`. Sign in on the web app with that email and password. The session
+token is stored in the browser, and the account's websites appear in the portfolio.
+
+If the API is unreachable, sign-in keeps a local session in the browser. Intelligence stays
+unavailable in that mode because it needs the API token.
+
+---
+
 ## 1. Install Dependencies
 
 ```bash
@@ -61,6 +79,9 @@ wrangler d1 execute roundseo-local --local --file=migrations/005_audit_evidence_
 wrangler d1 execute roundseo-local --local --file=migrations/006_operating_workflow_schema.sql
 wrangler d1 execute roundseo-local --local --file=migrations/007_finding_evidence.sql
 wrangler d1 execute roundseo-local --local --file=migrations/008_performance_audits.sql
+wrangler d1 execute roundseo-local --local --file=migrations/009_dataforseo_runs.sql
+wrangler d1 execute roundseo-local --local --file=migrations/010_intelligence_platform.sql
+wrangler d1 execute roundseo-local --local --file=migrations/011_native_intelligence.sql
 ```
 
 **Verify migrations worked:**
@@ -84,8 +105,7 @@ SELECT COUNT(*) FROM audits;
 # Copy template
 cp .env.example .env
 
-# For local dev, these are optional (just for PageSpeed API which is Phase 2)
-echo "GOOGLE_PAGESPEED_API_KEY=test-key-dev" >> .env
+# Local browser tests do not need a Google PageSpeed API key.
 ```
 
 ---

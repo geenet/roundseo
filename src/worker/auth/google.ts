@@ -86,14 +86,16 @@ export async function getGoogleUserInfo(accessToken: string): Promise<GoogleUser
 
 export async function createGoogleAuthToken(
   userInfo: GoogleUserInfo,
+  secret: string,
+  userId: string,
   organizationId?: string
 ): Promise<string> {
   return createToken(
     {
-      userId: `google_${userInfo.sub}`,
+      userId,
       email: userInfo.email,
       organizationId,
     },
-    '7d'
+    secret
   );
 }

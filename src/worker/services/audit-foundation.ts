@@ -24,7 +24,7 @@ export type AuditFoundationInput = {
  */
 export async function persistAuditFoundation(db: Database, input: AuditFoundationInput): Promise<void> {
   const { auditId, websiteId, collectionMethod, pages, results, metrics, startedAt, completedAt } = input;
-  await persistAuditMetadata(db, auditId, collectionMethod, metrics.crawlCoverage, startedAt, completedAt);
+  await persistAuditMetadata(db, auditId, collectionMethod, metrics.crawlCoverage, startedAt, completedAt, metrics.assurance);
   await ensureMeasurementDefinitions(db, completedAt);
 
   const resultByResolvedUrl = new Map(results.map(result => [normalizeUrl(result.finalUrl || result.url), result]));
@@ -166,7 +166,7 @@ export async function getPageSnapshotDetail(db: Database, pageIdentityId: string
   return { ...page, links: links.results || [], changes: changes.results || [] };
 }
 
-async function persistAuditMetadata(db: Database, auditId: string, collectionMethod: 'http' | 'browser', coverage: CrawlCoverage, startedAt: string, completedAt: string): Promise<void> {
+async function persistAuditMetadata(db: Database, auditId: string, collectionMethod: 'http' | 'browser', coverage: CrawlCoverage, startedAt: string, completedAt: string, assurance?: SiteMetrics['assurance']): Promise<void> {
   await db.prepare(`
     INSERT INTO audit_metadata (
       audit_id, collection_method, evidence_kind, availability, method_version,
@@ -184,8 +184,8 @@ async function persistAuditMetadata(db: Database, auditId: string, collectionMet
     collectionMethod,
     'observed',
     coverage.availability,
-    'crawl-rules-2026.10.0',
-    JSON.stringify(coverage),
+    assurance?.version || 'crawl-rules-2026.10.0',
+    JSON.stringify({ ...coverage, assurance }),
     startedAt,
     completedAt,
   ).run();
@@ -307,14 +307,14 @@ export async function persistFindingsAndActions(
   websiteId: string,
   findings: AuditFinding[],
   coverage: Availability,
-  collectionMethod: 'http' | 'browser' | 'pagespeed_insights',
+  collectionMethod: 'http' | 'browser' | 'pagespeed_insights' | 'browser_performance',
   timestamp: string,
 ): Promise<void> {
   const observedActionIds = new Set<string>();
   for (const finding of findings) {
     const ruleId = finding.ruleId || `${finding.category}.${slug(finding.title)}`;
     const findingId = `finding_${nanoid(16)}`;
-    const affectedPageCount = new Set(finding.evidence.map(item => item.url)).size;
+    const affectedPageCount = finding.affectedUrlCount ?? new Set(finding.evidence.map(item => item.url)).size;
     await db.prepare(`
       INSERT INTO audit_findings (
         id, audit_id, website_id, rule_id, rule_version, category, severity,

@@ -1,8 +1,6 @@
 // Third-party API integrations
 import { nanoid } from 'nanoid';
 import type {
-  Availability,
-  PerformanceAudit,
   PerformanceDevice,
   PerformanceDeviceResult,
   PerformanceMetric,
@@ -33,14 +31,6 @@ export interface GSCData {
   topQueries: Array<{ query: string; clicks: number; impressions: number; position: number }>;
   topPages: Array<{ page: string; clicks: number; impressions: number; ctr: number }>;
 }
-
-export const PAGESPEED_METHOD_VERSION = 'pagespeed-insights-2026.10.1';
-
-type PageSpeedFetchOptions = {
-  devices?: PerformanceDevice[];
-  /** Local preview may use the public endpoint without a configured key. */
-  allowUnauthenticated?: boolean;
-};
 
 export async function addIntegration(
   db: any,
@@ -111,7 +101,7 @@ export async function fetchGoogleSearchConsoleData(
       return null;
     }
 
-    const data = await response.json();
+    const data = await response.json() as { rows?: Array<{ keys: string[]; clicks: number; impressions: number; position: number }> };
     const topQueries = data.rows?.map((row: any) => ({
       query: row.keys[0],
       clicks: row.clicks,
@@ -141,63 +131,6 @@ export async function fetchGoogleSearchConsoleData(
     console.error('Failed to fetch GSC data:', error);
     return null;
   }
-}
-
-/**
- * Fetch PageSpeed Insights separately for mobile and desktop. The prior
- * implementation made one request and copied the same result into both
- * device columns; that hid the most important difference for SEO triage.
- */
-export async function fetchPageSpeedData(
-  pageUrl: string,
-  env: any,
-  options: PageSpeedFetchOptions = {},
-): Promise<PerformanceAudit> {
-  const fetchedAt = new Date().toISOString();
-  const devices: PerformanceDevice[] = options.devices?.length ? options.devices : ['mobile', 'desktop'];
-  const apiKey = typeof env?.GOOGLE_PAGESPEED_API_KEY === 'string' && !env.GOOGLE_PAGESPEED_API_KEY.includes('YOUR_')
-    ? env.GOOGLE_PAGESPEED_API_KEY
-    : undefined;
-
-  if (!apiKey && !options.allowUnauthenticated) {
-    return unavailablePageSpeedAudit(pageUrl, fetchedAt, devices, 'PageSpeed Insights is not configured for this workspace.');
-  }
-
-  const results = await Promise.all(devices.map(async (device) => {
-    const query = new URLSearchParams({
-      url: pageUrl,
-      strategy: device,
-      category: 'PERFORMANCE',
-    });
-    if (apiKey) query.set('key', apiKey);
-    try {
-      const response = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${query}`, {
-        signal: AbortSignal.timeout(45_000),
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        const missingKey = !apiKey && (response.status === 400 || response.status === 403);
-        return failedDeviceResult(device, fetchedAt, missingKey ? 'not_connected' : 'failed', pageSpeedErrorMessage(response.status, body));
-      }
-      return mapPageSpeedResponse(pageUrl, device, await response.json(), fetchedAt);
-    } catch (error) {
-      return failedDeviceResult(device, fetchedAt, 'failed', error instanceof Error ? error.message : 'PageSpeed Insights could not be reached.');
-    }
-  }));
-
-  const availability = overallAvailability(results);
-  return {
-    targetUrl: pageUrl,
-    provider: 'google_pagespeed_insights',
-    providerLabel: 'Google PageSpeed Insights',
-    availability,
-    fetchedAt,
-    methodVersion: PAGESPEED_METHOD_VERSION,
-    devices: results,
-    error: availability === 'failed' || availability === 'not_connected'
-      ? Array.from(new Set(results.map(result => result.error).filter((error): error is string => Boolean(error)))).join(' ')
-      : undefined,
-  };
 }
 
 /** Pure mapper used by the worker and covered by unit tests. */
@@ -240,34 +173,6 @@ export function mapPageSpeedResponse(
     fieldDataScope: field?.scope || 'none',
     opportunities: mapOpportunities(audits),
     fetchedAt,
-  };
-}
-
-function unavailablePageSpeedAudit(pageUrl: string, fetchedAt: string, devices: PerformanceDevice[], error: string): PerformanceAudit {
-  return {
-    targetUrl: pageUrl,
-    provider: 'google_pagespeed_insights',
-    providerLabel: 'Google PageSpeed Insights',
-    availability: 'not_connected',
-    fetchedAt,
-    methodVersion: PAGESPEED_METHOD_VERSION,
-    devices: devices.map(device => failedDeviceResult(device, fetchedAt, 'not_connected', error)),
-    error,
-  };
-}
-
-function failedDeviceResult(device: PerformanceDevice, fetchedAt: string, availability: Availability, error: string): PerformanceDeviceResult {
-  return {
-    device,
-    availability,
-    labScore: null,
-    labMetrics: [],
-    fieldMetrics: [],
-    fieldDataAvailability: availability === 'failed' ? 'failed' : 'not_measured',
-    fieldDataScope: 'none',
-    opportunities: [],
-    fetchedAt,
-    error,
   };
 }
 
@@ -335,26 +240,8 @@ function ratingForFieldCategory(category: unknown): PerformanceMetricRating {
   return category === 'FAST' ? 'good' : category === 'AVERAGE' ? 'needs_improvement' : category === 'SLOW' ? 'poor' : 'unknown';
 }
 
-function overallAvailability(results: PerformanceDeviceResult[]): Availability {
-  if (results.some(result => result.availability === 'measured')) return results.every(result => result.availability === 'measured') ? 'measured' : 'partial';
-  if (results.some(result => result.availability === 'not_connected')) return 'not_connected';
-  if (results.some(result => result.availability === 'failed')) return 'failed';
-  return 'not_measured';
-}
-
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function pageSpeedErrorMessage(status: number, body: string): string {
-  if (/quota exceeded/i.test(body)) {
-    return 'PageSpeed Insights quota is unavailable right now. Add a configured API key or try again later.';
-  }
-  if (/api key|key.*required/i.test(body)) {
-    return 'PageSpeed Insights needs a configured API key before it can measure this site.';
-  }
-  const providerMessage = body.match(/"message"\s*:\s*"([^"]+)"/)?.[1];
-  return providerMessage || `PageSpeed Insights returned HTTP ${status}.`;
 }
 
 export async function syncGSCData(

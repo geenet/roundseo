@@ -26,7 +26,7 @@ export async function createReport(
   websiteId: string,
   organizationId: string,
   createdBy: string,
-  reportType = 'full'
+  reportType: Report['reportType'] = 'full'
 ): Promise<Report> {
   const id = `report_${nanoid(16)}`;
   const now = new Date().toISOString();

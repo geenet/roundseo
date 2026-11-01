@@ -31,6 +31,22 @@ export async function canAccessWebsite(db: Database, userId: string, websiteId: 
   return Boolean(row);
 }
 
+/** Provider calls spend shared organization balance, so read-only/client team
+ * members may inspect saved evidence but cannot start a paid request. */
+export async function canRunWebsiteIntelligence(db: Database, userId: string, websiteId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT website.id
+    FROM websites website
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE website.id = ?
+      AND (organization.owner_id = ? OR member.role IN ('admin', 'manager'))
+    LIMIT 1
+  `).bind(userId, websiteId, userId).first();
+  return Boolean(row);
+}
+
 export async function canAccessAudit(db: Database, userId: string, auditId: string): Promise<boolean> {
   const row = await db.prepare(`
     SELECT audit.id

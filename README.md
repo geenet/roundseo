@@ -58,6 +58,17 @@ Similar stack to BONA:
 - Email/password with JWT
 - Team-based access control
 
+### RoundSEO Intelligence API
+
+RoundSEO collects and analyzes its own search intelligence: SERP snapshots,
+keyword and market analysis, app-store visibility, answer-engine sampling,
+and page inspection and crawls. Runs and their evidence are scoped to a
+website and stored in D1. Each action reports its own availability, and any
+metric without a configured source is returned as unavailable rather than
+estimated. See [`docs/INTELLIGENCE_API.md`](docs/INTELLIGENCE_API.md) for the
+endpoints and sources, or the
+[`OpenAPI 3.1 contract`](docs/openapi/intelligence.yaml) for generated clients.
+
 ## Project Structure
 
 ```
@@ -134,7 +145,7 @@ npm run test:regression   # Regression suite
 
 ### Code Quality
 ```bash
-npm run check             # TypeScript, linting, tests
+npm run check             # UI/platform guards and TypeScript across all source files
 npm run build             # Production build
 ```
 

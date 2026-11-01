@@ -1,20 +1,14 @@
 // RoundSEO Worker Entry Point
 // Handles all API requests, auth, and crawl orchestration
 
-import type { PagesFunction } from '@cloudflare/workers-types';
 import { routeRequest } from './api/router';
 import { buildAuditJobMessage, createAudit, getCrawlJob, recoverExpiredCrawlJobs, runAuditJob } from './services/audits';
+import { isIntelligenceJobMessage, recoverStaleIntelligenceRuns, runIntelligenceJob, enqueueIntelligenceRun } from './services/intelligence-jobs';
 
-interface Env {
-  DB: D1Database;
-  R2: R2Bucket;
-  CRAWLERS: DurableObjectNamespace;
-  AUTH_SECRET: string;
-  GOOGLE_CLIENT_ID: string;
-  GOOGLE_CLIENT_SECRET: string;
-  GOOGLE_PAGESPEED_API_KEY?: string;
-  JWT_SECRET: string;
-  API_URL: string;
+interface Env extends WorkerBindings {
+  ROUNDSEO_PERFORMANCE_RUNNER_URL?: string;
+  ROUNDSEO_RUNNER_TOKEN?: string;
+  PERFORMANCE_RUNNER?: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
   CRAWL_JOBS?: { send(message: unknown): Promise<void> };
 }
 
@@ -45,27 +39,27 @@ export default {
       console.error('Request error:', error);
       return new Response(
         JSON.stringify({
-          error: 'Internal Server Error',
-          message: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof SyntaxError ? 'Invalid request JSON' : 'Internal Server Error'
         }),
         {
-          status: 500,
+          status: error instanceof SyntaxError ? 400 : 500,
           headers: { 'Content-Type': 'application/json' },
         }
       );
     }
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     try {
       console.log('Scheduled crawl check started');
 
       // Get all active audit schedules where next_run_at <= now
       const now = new Date().toISOString();
       const recoveredJobs = await recoverExpiredCrawlJobs(env.DB);
+      await recoverStaleIntelligenceRuns(env as any, ctx, new Date());
       for (const message of recoveredJobs) await enqueueAuditMessage(env, ctx, message);
       const schedules = await env.DB.prepare(`
-        SELECT id, website_id, next_run_at FROM audit_schedules
+        SELECT id, website_id, schedule_type, next_run_at FROM audit_schedules
         WHERE is_active = TRUE AND next_run_at <= ?
       `).bind(now).all();
 
@@ -101,8 +95,19 @@ export default {
     }
   },
 
-  async queue(batch: any, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async queue(batch: any, env: Env, ctx: ExecutionContext): Promise<void> {
     for (const message of batch.messages || []) {
+      if (isIntelligenceJobMessage(message.body)) {
+        try {
+          const outcome = await runIntelligenceJob(env as any, message.body);
+          if (outcome === 'continue') await enqueueIntelligenceRun(env as any, ctx, message.body.websiteId, message.body.intelligenceRunId);
+          message.ack();
+        } catch (error) {
+          console.error('Intelligence job failed:', error);
+          message.retry();
+        }
+        continue;
+      }
       const payload = message.body as { jobId?: string; auditId?: string; websiteUrl?: string; websiteId?: string; source?: 'user' | 'schedule' | 'verification'; jobType?: 'site_crawl' | 'verification_crawl' | 'pagespeed_audit' };
       if (!payload.jobId || !payload.auditId || !payload.websiteUrl) {
         message.ack();
@@ -122,7 +127,7 @@ export default {
       else message.ack();
     }
   },
-} satisfies PagesFunction<Env>;
+} satisfies ExportedHandler<Env>;
 
 async function enqueueAudit(env: Env, ctx: ExecutionContext, audit: Awaited<ReturnType<typeof createAudit>>): Promise<void> {
   const message = await buildAuditJobMessage(env.DB, audit);

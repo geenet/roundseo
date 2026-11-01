@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
   ActivityIndicator,
-  Dimensions,
   TouchableOpacity,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
@@ -65,8 +64,8 @@ export default function AnalyticsDashboardScreen({ route, navigation }: any) {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      const auditData = await auditResponse.json();
-      const keywordData = await keywordResponse.json();
+      const auditData = await auditResponse.json() as { metrics?: Omit<DashboardData, 'topKeywords' | 'recentRecommendations' | 'pagesWithIssues'>; recommendations?: DashboardData['recentRecommendations'] };
+      const keywordData = await keywordResponse.json() as { keywords?: DashboardData['topKeywords'] };
 
       // Combine data for dashboard
       const metrics = auditData.metrics || {

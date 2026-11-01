@@ -1,5 +1,5 @@
 // Auth middleware for verifying JWT tokens
-import { verifyToken, extractTokenFromHeader, type JWTPayload } from './jwt';
+import { verifyToken, extractTokenFromHeader, type AuthEnvironment } from './jwt';
 
 export interface AuthContext {
   userId: string;
@@ -8,7 +8,7 @@ export interface AuthContext {
   token: string;
 }
 
-export async function requireAuth(request: Request): Promise<{ auth: AuthContext | null; error: string | null }> {
+export async function requireAuth(request: Request, env: AuthEnvironment = {}): Promise<{ auth: AuthContext | null; error: string | null }> {
   const authHeader = request.headers.get('Authorization');
   const token = extractTokenFromHeader(authHeader);
 
@@ -16,7 +16,7 @@ export async function requireAuth(request: Request): Promise<{ auth: AuthContext
     return { auth: null, error: 'No authorization token provided' };
   }
 
-  const payload = await verifyToken(token);
+  const payload = await verifyToken(token, env.JWT_SECRET);
   if (!payload) {
     return { auth: null, error: 'Invalid or expired token' };
   }

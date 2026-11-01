@@ -1,5 +1,5 @@
 // Login Screen for React Native
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -11,11 +11,10 @@ import {
   ScrollView,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import * as WebBrowser from 'expo-web-browser';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8789';
 
-export default function LoginScreen({ navigation }: any) {
+export default function LoginScreen({ navigation, onAuthenticated }: any) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -34,9 +33,9 @@ export default function LoginScreen({ navigation }: any) {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json();
+      const data = await response.json() as { token?: string; error?: string };
 
-      if (!response.ok) {
+      if (!response.ok || !data.token) {
         Alert.alert('Login Failed', data.error || 'Invalid credentials');
         return;
       }
@@ -45,55 +44,11 @@ export default function LoginScreen({ navigation }: any) {
       await SecureStore.setItemAsync('authToken', data.token);
 
       // Navigate to dashboard
-      navigation.replace('Dashboard');
+      onAuthenticated(data.token);
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Login failed');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    try {
-      // Generate state for OAuth security
-      const state = Math.random().toString(36).substring(7);
-
-      // Construct Google OAuth URL
-      const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(API_URL + '/api/v2/auth/google/callback')}&response_type=code&scope=openid email profile&state=${state}`;
-
-      // Open browser for OAuth flow
-      const result = await WebBrowser.openAuthSessionAsync(
-        googleAuthUrl,
-        'roundseo://'
-      );
-
-      if (result.type === 'success') {
-        // Extract code from redirect URL
-        const url = result.url;
-        const codeMatch = url.match(/code=([^&]+)/);
-
-        if (codeMatch) {
-          const code = codeMatch[1];
-
-          // Exchange code for token
-          const response = await fetch(`${API_URL}/api/v2/auth/google/callback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code, state }),
-          });
-
-          const data = await response.json();
-
-          if (response.ok) {
-            await SecureStore.setItemAsync('authToken', data.token);
-            navigation.replace('Dashboard');
-          } else {
-            Alert.alert('Error', data.error || 'Google login failed');
-          }
-        }
-      }
-    } catch (error) {
-      Alert.alert('Error', error instanceof Error ? error.message : 'Google login failed');
     }
   };
 
@@ -146,10 +101,10 @@ export default function LoginScreen({ navigation }: any) {
 
         <TouchableOpacity
           style={styles.googleButton}
-          onPress={handleGoogleLogin}
-          disabled={loading}
+          disabled
+          accessibilityState={{ disabled: true }}
         >
-          <Text style={styles.googleButtonText}>Continue with Google</Text>
+          <Text style={styles.googleButtonText}>Google sign-in requires native setup</Text>
         </TouchableOpacity>
 
         <View style={styles.footer}>

@@ -1,9 +1,12 @@
 // JWT token management for RoundSEO
 import { SignJWT, jwtVerify } from 'jose';
 
-const JWT_SECRET = new TextEncoder().encode(
-  globalThis.env?.JWT_SECRET || 'dev-secret-key-change-in-production'
-);
+export type AuthEnvironment = { JWT_SECRET?: string };
+
+function signingKey(secret: string | undefined): Uint8Array {
+  if (!secret?.trim()) throw new Error('JWT_SECRET must be configured');
+  return new TextEncoder().encode(secret);
+}
 
 export interface JWTPayload {
   userId: string;
@@ -13,7 +16,7 @@ export interface JWTPayload {
   exp: number;
 }
 
-export async function createToken(payload: Omit<JWTPayload, 'iat' | 'exp'>, expiresIn = '7d'): Promise<string> {
+export async function createToken(payload: Omit<JWTPayload, 'iat' | 'exp'>, secret: string | undefined, expiresIn = '7d'): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const expireSeconds = parseExpiration(expiresIn);
 
@@ -21,13 +24,15 @@ export async function createToken(payload: Omit<JWTPayload, 'iat' | 'exp'>, expi
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt(now)
     .setExpirationTime(now + expireSeconds)
-    .sign(JWT_SECRET);
+    .sign(signingKey(secret));
 }
 
-export async function verifyToken(token: string): Promise<JWTPayload | null> {
+export async function verifyToken(token: string, secret: string | undefined): Promise<JWTPayload | null> {
   try {
-    const verified = await jwtVerify(token, JWT_SECRET);
-    return verified.payload as JWTPayload;
+    const { payload } = await jwtVerify(token, signingKey(secret), { algorithms: ['HS256'] });
+    if (typeof payload.userId !== 'string' || !payload.userId || typeof payload.email !== 'string' || !payload.email || typeof payload.iat !== 'number' || typeof payload.exp !== 'number') return null;
+    if (payload.organizationId !== undefined && typeof payload.organizationId !== 'string') return null;
+    return { userId: payload.userId, email: payload.email, iat: payload.iat, exp: payload.exp, ...(typeof payload.organizationId === 'string' ? { organizationId: payload.organizationId } : {}) };
   } catch {
     return null;
   }
@@ -54,7 +59,7 @@ function parseExpiration(expiresIn: string): number {
   }
 }
 
-export function extractTokenFromHeader(authHeader: string | undefined): string | null {
+export function extractTokenFromHeader(authHeader: string | null | undefined): string | null {
   if (!authHeader?.startsWith('Bearer ')) {
     return null;
   }

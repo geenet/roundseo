@@ -1,8 +1,6 @@
-import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 
-export default function AuditResultsScreen({ route, navigation }: any) {
-  const { websiteId } = route.params;
+export default function AuditResultsScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>

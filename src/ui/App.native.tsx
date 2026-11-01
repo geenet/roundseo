@@ -1,5 +1,5 @@
 // React Native Expo App
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -47,21 +47,20 @@ export default function App() {
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
-          animationEnabled: true,
+          animation: 'default',
         }}
       >
         {!userToken ? (
           <>
             <Stack.Screen
               name="Login"
-              component={LoginScreen}
               options={{ animationTypeForReplace: 'pop' }}
-            />
-            <Stack.Screen name="Signup" component={SignupScreen} />
+            >{props => <LoginScreen {...props} onAuthenticated={setUserToken} />}</Stack.Screen>
+            <Stack.Screen name="Signup">{props => <SignupScreen {...props} onAuthenticated={setUserToken} />}</Stack.Screen>
           </>
         ) : (
           <>
-            <Stack.Screen name="Dashboard" component={DashboardScreen} />
+            <Stack.Screen name="Dashboard">{props => <DashboardScreen {...props} onSignOut={() => setUserToken(null)} />}</Stack.Screen>
             <Stack.Screen name="Websites" component={WebsiteListScreen} />
             <Stack.Screen name="AuditResults" component={AuditResultsScreen} />
           </>

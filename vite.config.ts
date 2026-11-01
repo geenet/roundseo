@@ -2,11 +2,15 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { lookup } from 'node:dns/promises';
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { BaseCrawler } from './src/worker/crawlers/base';
 import { parsePageMetrics } from './src/worker/crawlers/parser';
 import { calculateSiteMetrics } from './src/worker/crawlers/metrics';
-import { fetchPageSpeedData } from './src/worker/services/integrations';
+import { measureLocalBrowserPerformance } from './src/local/browser-performance';
+import { measureRealUserPageLoading, type RealUserPageLoadingProgress } from './src/local/real-user-page-loading';
+import type { PerformanceAudit, RealUserPageLoadingAudit } from './src/shared/operating-model';
+import { createLocalIntelligenceGateway, type LocalIntelligenceGateway } from './src/local/intelligence-gateway';
 
 type CrawlSnapshot = {
   url: string;
@@ -49,11 +53,13 @@ type LocalPageInventoryRow = {
 };
 
 export default defineConfig(({ mode }) => {
-  // The Vite server reads this value, but it is never bundled into the client.
-  // Put GOOGLE_PAGESPEED_API_KEY in .env.local for a live local preview.
-  const localEnv = loadEnv(mode, process.cwd(), '');
+  const loadedEnv = loadEnv(mode, process.cwd(), '');
+  const intelligence = createLocalIntelligenceGateway({
+    databasePath: path.resolve(process.cwd(), loadedEnv.DATABASE_URL || '.local/roundseo-dev.db'),
+    environment: { ...loadedEnv, ...process.env },
+  });
   return {
-    plugins: [localAuditPlugin(localEnv.GOOGLE_PAGESPEED_API_KEY), react()],
+    plugins: [localAuditPlugin(intelligence), react()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
@@ -92,10 +98,13 @@ export default defineConfig(({ mode }) => {
   };
 });
 
-function localAuditPlugin(pageSpeedApiKey?: string): Plugin {
+function localAuditPlugin(intelligence: LocalIntelligenceGateway): Plugin {
+  const jobs = new Map<string, LocalAuditJob>();
+  const realUserPageLoadingJobs = new Map<string, LocalRealUserPageLoadingJob>();
   return {
     name: 'roundseo-local-audit',
     configureServer(server) {
+      server.middlewares.use('/__roundseo/intelligence', (request, response, next) => intelligence.handle(request, response, next));
       server.middlewares.use('/__roundseo/local-audit', (request, response, next) => {
         if (request.method !== 'POST') {
           next();
@@ -108,10 +117,124 @@ function localAuditPlugin(pageSpeedApiKey?: string): Plugin {
           next();
           return;
         }
-        void runLocalPerformanceAudit(request, response, pageSpeedApiKey);
+        void runLocalPerformanceAudit(request, response);
+      });
+      server.middlewares.use('/__roundseo/real-user-page-loading-jobs', (request, response, next) => {
+        if (request.method === 'POST') {
+          void (async () => {
+            try {
+              const payload = await readJsonBody(request);
+              const website = await parsePublicWebsite(typeof payload.url === 'string' ? payload.url : '');
+              const now = new Date().toISOString();
+              for (const [id, job] of realUserPageLoadingJobs) if (job.status !== 'running' && Date.now() - Date.parse(job.updatedAt) > 2 * 60 * 60 * 1000) realUserPageLoadingJobs.delete(id);
+              const job: LocalRealUserPageLoadingJob = {
+                id: randomUUID(),
+                status: 'running',
+                startedAt: now,
+                updatedAt: now,
+                progress: { phase: 'discovering', completedPages: 0, totalPages: 1, currentUrl: website.href },
+              };
+              realUserPageLoadingJobs.set(job.id, job);
+              sendJson(response, 202, { id: job.id });
+              void runRealUserPageLoadingJob(job, website);
+            } catch (error) { sendJson(response, 422, { error: error instanceof Error ? error.message : 'Could not start the real user page-loading replay.' }); }
+          })();
+          return;
+        }
+        if (request.method === 'GET') {
+          const id = new URL(request.url || '/', 'http://localhost').searchParams.get('id');
+          const job = id ? realUserPageLoadingJobs.get(id) : undefined;
+          if (!job) { sendJson(response, 404, { error: 'This real user page-loading run is no longer available because the local server restarted or the job expired. Run it again.' }); return; }
+          sendJson(response, 200, job);
+          return;
+        }
+        next();
+      });
+      server.middlewares.use('/__roundseo/audit-jobs', (request, response, next) => {
+        if (request.method === 'POST') {
+          void (async () => {
+            try {
+              const payload = await readJsonBody(request);
+              const website = await parsePublicWebsite(typeof payload.url === 'string' ? payload.url : '');
+              const now = new Date().toISOString();
+              for (const [id, job] of jobs) if (job.status !== 'running' && Date.now() - Date.parse(job.updatedAt) > 2 * 60 * 60 * 1000) jobs.delete(id);
+              const job: LocalAuditJob = { id: randomUUID(), status: 'running', phase: 'discovery', startedAt: now, updatedAt: now, progress: { attempted: 0, discovered: 0 } };
+              jobs.set(job.id, job);
+              sendJson(response, 202, { id: job.id });
+              void runLocalAuditJob(job, website);
+            } catch (error) { sendJson(response, 422, { error: error instanceof Error ? error.message : 'Could not start the audit.' }); }
+          })();
+          return;
+        }
+        if (request.method === 'GET') {
+          const id = new URL(request.url || '/', 'http://localhost').searchParams.get('id');
+          const job = id ? jobs.get(id) : undefined;
+          if (!job) { sendJson(response, 404, { error: 'This audit is no longer available because the local server restarted or the job expired. Run it again.' }); return; }
+          sendJson(response, 200, job);
+          return;
+        }
+        next();
       });
     },
   };
+}
+
+type LocalAuditJob = {
+  id: string;
+  status: 'running' | 'complete' | 'failed';
+  phase: 'discovery' | 'crawling' | 'analysis' | 'performance';
+  startedAt: string;
+  updatedAt: string;
+  progress: { attempted: number; discovered: number; currentUrl?: string };
+  result?: { crawl: Awaited<ReturnType<typeof collectLocalAudit>>; performance?: PerformanceAudit; performanceError?: string };
+  error?: string;
+};
+
+type LocalRealUserPageLoadingJob = {
+  id: string;
+  status: 'running' | 'complete' | 'failed';
+  startedAt: string;
+  updatedAt: string;
+  progress: RealUserPageLoadingProgress;
+  result?: { loading: RealUserPageLoadingAudit };
+  error?: string;
+};
+
+async function runLocalAuditJob(job: LocalAuditJob, website: URL): Promise<void> {
+  const timing = collectLocalPerformance(website).then(performance => ({ performance })).catch(error => ({ performanceError: error instanceof Error ? error.message : 'Performance measurement failed.' }));
+  try {
+    const crawl = await collectLocalAudit(website, (phase, progress) => {
+      job.phase = phase;
+      if (progress) job.progress = progress;
+      job.updatedAt = new Date().toISOString();
+    });
+    job.phase = 'performance'; job.updatedAt = new Date().toISOString();
+    const performance = await timing;
+    job.result = { crawl, ...performance };
+    job.status = 'complete';
+  } catch (error) {
+    job.status = 'failed';
+    job.error = error instanceof Error ? error.message : 'The crawl could not be completed.';
+  } finally { job.updatedAt = new Date().toISOString(); }
+}
+
+async function runRealUserPageLoadingJob(job: LocalRealUserPageLoadingJob, website: URL): Promise<void> {
+  try {
+    const loading = await measureRealUserPageLoading(website.href, {
+      maxLinkedPages: 10,
+      onProgress: progress => {
+        job.progress = progress;
+        job.updatedAt = new Date().toISOString();
+      },
+    });
+    job.result = { loading };
+    job.status = 'complete';
+  } catch (error) {
+    job.status = 'failed';
+    job.error = error instanceof Error ? error.message : 'The real user page-loading replay could not be completed.';
+  } finally {
+    job.updatedAt = new Date().toISOString();
+  }
 }
 
 async function runLocalAudit(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -119,8 +242,17 @@ async function runLocalAudit(request: IncomingMessage, response: ServerResponse)
     const payload = await readJsonBody(request);
     const rawUrl = typeof payload.url === 'string' ? payload.url : '';
     const website = await parsePublicWebsite(rawUrl);
-    const crawler = new BaseCrawler(website.href, { maxPages: 30, maxDepth: 4, delay: 120, timeout: 8_000 });
-    const staticResults = await crawler.crawl();
+    sendJson(response, 200, await collectLocalAudit(website));
+  } catch (error) {
+    sendJson(response, 422, { error: error instanceof Error ? error.message : 'The crawl could not be completed.' });
+  }
+}
+
+async function collectLocalAudit(website: URL, onProgress?: (phase: LocalAuditJob['phase'], progress?: LocalAuditJob['progress']) => void) {
+    const crawler = new BaseCrawler(website.href, { maxPages: 500, maxDepth: 50, delay: 100, timeout: 10_000, discoverSitemaps: true });
+    const staticResults = await crawler.crawl(progress => onProgress?.('crawling', progress));
+    onProgress?.('analysis');
+    const staticCoverage = crawler.getCoverageSnapshot();
     const staticPages = collectPageMetrics(staticResults);
     let results: CrawlSnapshot[] = staticResults;
     let rendered = false;
@@ -128,7 +260,7 @@ async function runLocalAudit(request: IncomingMessage, response: ServerResponse)
     // Static HTML is the fastest and most reproducible crawl mode. When it is
     // only an application shell, use a real browser locally rather than
     // presenting missing-content or missing-link guesses as facts.
-    if (Array.from(staticPages.values()).some(page => page.requiresJavaScriptRendering)) {
+    if (staticPages.size <= 1 && Array.from(staticPages.values()).some(page => page.requiresJavaScriptRendering)) {
       try {
         const renderedResults = await crawlRenderedSite(website);
         if (renderedResults.length) {
@@ -151,54 +283,73 @@ async function runLocalAudit(request: IncomingMessage, response: ServerResponse)
       redirected: result.redirected,
       blockedByRobots: result.blockedByRobots,
     })), {
-      maxPages: rendered ? 12 : 30,
-      maxDepth: 4,
+      maxPages: rendered ? 30 : 500,
+      maxDepth: 50,
       rendered,
-      limitReached: results.length >= (rendered ? 12 : 30),
+      discoveredUrls: Math.max(staticCoverage.discoveredUrls, results.length),
+      limitReached: rendered ? staticCoverage.discoveredUrls > results.length : staticCoverage.limitReached,
+      discovery: rendered ? undefined : staticCoverage,
     });
     const { findings, ...summary } = metrics;
-    sendJson(response, 200, {
+    return {
       audit: {
         status: 'completed',
         pagesCrawled: pagesByUrl.size,
-        pagesFound: results.length,
+        pagesFound: metrics.crawlCoverage.discoveredUrls,
         completedAt: new Date().toISOString(),
         rendered,
-        methodVersion: 'local-audit-2026.10.0',
+        methodVersion: 'local-audit-2026.10.4',
       },
       metrics: summary,
       findings,
+      security: collectLocalSecurityAudit(website, staticResults, results),
       pages: Array.from(pagesByUrl.values()).map(pageToInventoryRow),
-    });
-  } catch (error) {
-    sendJson(response, 422, { error: error instanceof Error ? error.message : 'The crawl could not be completed.' });
-  }
+    };
 }
 
-/**
- * A local-preview adapter for the same PageSpeed mapper the Worker uses. It
- * does not synthesize scores: a missing provider response remains explicitly
- * unavailable in the UI.
- */
-async function runLocalPerformanceAudit(request: IncomingMessage, response: ServerResponse, pageSpeedApiKey?: string): Promise<void> {
+function collectLocalSecurityAudit(website: URL, staticResults: CrawlSnapshot[], inspectedResults: CrawlSnapshot[]) {
+  const root = staticResults.find(result => result.url === website.href) || staticResults[0];
+  const isHttps = website.protocol === 'https:';
+  const securityHeaderNames = ['strict-transport-security', 'content-security-policy', 'x-content-type-options', 'referrer-policy', 'permissions-policy'];
+  const securityHeaders = securityHeaderNames.filter(name => Boolean(root?.responseHeaders?.[name]));
+  const httpPageCount = inspectedResults.filter(result => /^http:\/\//i.test(result.finalUrl || result.url)).length;
+  const httpLinkCount = inspectedResults.reduce((total, result) => total + result.links.filter(link => /^http:\/\//i.test(link)).length, 0);
+  const tlsStatus = isHttps && root?.statusCode ? 'validated' : isHttps ? 'unavailable' : 'not_applicable';
+  return {
+    availability: root?.statusCode ? isHttps ? 'measured' : 'partial' : 'failed',
+    transport: isHttps ? 'https' : website.protocol === 'http:' ? 'http' : 'unknown',
+    tlsStatus,
+    rootStatusCode: root?.statusCode || null,
+    httpPageCount,
+    httpLinkCount,
+    securityHeaders,
+    missingSecurityHeaders: securityHeaderNames.filter(name => !securityHeaders.includes(name)),
+    checkedAt: new Date().toISOString(),
+    note: isHttps && root?.statusCode ? 'HTTPS was reached from the public crawl with certificate validation enabled. Header presence is checked only for the retained response.' : 'The public crawl could not validate the HTTPS origin for this report.',
+  };
+}
+
+/** Run a local browser performance audit without an external performance API. */
+async function runLocalPerformanceAudit(request: IncomingMessage, response: ServerResponse): Promise<void> {
   try {
     const payload = await readJsonBody(request);
     const rawUrl = typeof payload.url === 'string' ? payload.url : '';
     const website = await parsePublicWebsite(rawUrl);
-    const performance = await fetchPageSpeedData(website.href, {
-      GOOGLE_PAGESPEED_API_KEY: pageSpeedApiKey,
-    }, { allowUnauthenticated: true });
-    sendJson(response, 200, { performance });
+    sendJson(response, 200, { performance: await collectLocalPerformance(website) });
   } catch (error) {
-    sendJson(response, 422, { error: error instanceof Error ? error.message : 'The PageSpeed audit could not be completed.' });
+    sendJson(response, 422, { error: error instanceof Error ? error.message : 'The browser performance audit could not be completed.' });
   }
+}
+
+async function collectLocalPerformance(website: URL): Promise<PerformanceAudit> {
+  return measureLocalBrowserPerformance(website.href);
 }
 
 function pageToInventoryRow(page: ReturnType<typeof parsePageMetrics>): LocalPageInventoryRow {
   return {
     url: page.url,
     statusCode: page.statusCode || 200,
-    crawlDepth: page.crawlDepth || 0,
+    crawlDepth: page.crawlDepth ?? 0,
     title: page.title,
     metaDescription: page.metaDescription,
     h1: page.h1Text,
@@ -258,9 +409,9 @@ async function crawlRenderedSite(rootUrl: URL): Promise<CrawlSnapshot[]> {
   const results: CrawlSnapshot[] = [];
 
   try {
-    while (queue.length && results.length < 12) {
+    while (queue.length && results.length < 30) {
       const next = queue.shift();
-      if (!next || next.depth > 4 || visited.has(next.url)) continue;
+      if (!next || next.depth > 50 || visited.has(next.url)) continue;
       visited.add(next.url);
       const page = await context.newPage();
       try {
@@ -286,7 +437,7 @@ async function crawlRenderedSite(rootUrl: URL): Promise<CrawlSnapshot[]> {
         if (statusCode >= 200 && statusCode < 300) {
           for (const link of links) {
             const normalized = normalizeCrawlUrl(link, rootUrl);
-            if (normalized && !visited.has(normalized) && queue.length < 12) queue.push({ url: normalized, depth: next.depth + 1 });
+            if (normalized && !visited.has(normalized) && queue.length < 500) queue.push({ url: normalized, depth: next.depth + 1 });
           }
         }
       } catch (error) {
@@ -325,16 +476,16 @@ function isInspectableHtml(statusCode: number, contentType: string | undefined, 
   return !type || type.includes('text/html') || type.includes('application/xhtml+xml');
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<{ url?: unknown }> {
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let length = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     length += buffer.length;
-    if (length > 10_000) throw new Error('The audit request is too large.');
+    if (length > 256_000) throw new Error('The request body is too large.');
     chunks.push(buffer);
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as { url?: unknown };
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
 }
 
 async function parsePublicWebsite(rawUrl: string): Promise<URL> {
