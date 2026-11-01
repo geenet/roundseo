@@ -42,6 +42,8 @@ import {
   fetchKeywordIdeas,
   fetchKeywordMetrics,
   isKeywordMarketSupported,
+  KEYWORD_MARKET_COUNTRIES,
+  KEYWORD_MARKET_LANGUAGES,
   KEYWORD_METRICS_METHOD,
   type KeywordMetricRecord,
 } from '../intelligence/keywords';
@@ -153,6 +155,7 @@ export function intelligenceCapabilityStatus(config: IntelligenceConfig): Intell
     capabilities,
     actions,
     safeguards: { maximumSiteCrawlPages: config.maximumSiteCrawlPages, maximumLiveRequestsPerDay: config.dailyRequestLimit },
+    markets: { countries: [...KEYWORD_MARKET_COUNTRIES], languages: [...KEYWORD_MARKET_LANGUAGES] },
   };
 }
 

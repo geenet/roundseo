@@ -12,6 +12,7 @@ if (!existsSync(path.join(root, 'migrations/008_performance_audits.sql'))) failu
 if (!existsSync(path.join(root, 'migrations/009_dataforseo_runs.sql'))) failures.push('The legacy run-ledger migration is missing; keep it so the migration history stays intact.');
 if (!existsSync(path.join(root, 'migrations/010_intelligence_platform.sql'))) failures.push('The RoundSEO intelligence platform migration is missing.');
 if (!existsSync(path.join(root, 'migrations/011_native_intelligence.sql'))) failures.push('The native intelligence migration is missing.');
+if (!existsSync(path.join(root, 'migrations/012_website_media.sql'))) failures.push('The website media migration is missing.');
 if (failures.length) {
   failures.forEach(message => console.error(message));
   process.exitCode = 1;

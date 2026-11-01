@@ -100,6 +100,7 @@ echo "wrangler d1 execute roundseo --env $ENV --file=migrations/008_performance_
 echo "wrangler d1 execute roundseo --env $ENV --file=migrations/009_dataforseo_runs.sql"
 echo "wrangler d1 execute roundseo --env $ENV --file=migrations/010_intelligence_platform.sql"
 echo "wrangler d1 execute roundseo --env $ENV --file=migrations/011_native_intelligence.sql  # run once: adds columns with ALTER TABLE"
+echo "wrangler d1 execute roundseo --env $ENV --file=migrations/012_website_media.sql"
 echo ""
 
 # Verify deployment

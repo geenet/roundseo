@@ -36,7 +36,7 @@ const actions: ActionState[] = [
 ];
 
 function statusBody() {
-  return { available: true, capabilities, actions, safeguards: { maximumSiteCrawlPages: 500, maximumLiveRequestsPerDay: 500 } };
+  return { available: true, capabilities, actions, safeguards: { maximumSiteCrawlPages: 500, maximumLiveRequestsPerDay: 500 }, markets: { countries: ['GB', 'PL', 'US'], languages: ['en', 'pl'] } };
 }
 
 

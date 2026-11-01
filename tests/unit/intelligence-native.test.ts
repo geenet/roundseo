@@ -14,11 +14,11 @@ import { askAnswerEngine } from '../../src/worker/intelligence/answers';
 import { lookupStoreApp, searchStore, validAppId } from '../../src/worker/intelligence/apps';
 import { IntelligenceError } from '../../src/worker/intelligence/errors';
 import { fetchPublicPage } from '../../src/worker/intelligence/http';
-import { fetchKeywordIdeas, fetchKeywordMetrics, googleAdsMarket } from '../../src/worker/intelligence/keywords';
+import { fetchKeywordIdeas, fetchKeywordMetrics, googleAdsMarket, isKeywordMarketSupported } from '../../src/worker/intelligence/keywords';
 import { htmlToMarkdown, inspectPage, pageChecks } from '../../src/worker/intelligence/pages';
 import { collectSerp, detectSerpBlock, parseRelatedTerms, parseSerpHtml, serpSearchUrl } from '../../src/worker/intelligence/serp';
 import { readIntelligenceConfig } from '../../src/worker/intelligence/config';
-import { intelligenceActionStatuses, validateIntelligenceRequest } from '../../src/worker/services/intelligence';
+import { intelligenceActionStatuses, intelligenceCapabilityStatus, validateIntelligenceRequest } from '../../src/worker/services/intelligence';
 import type { EvidenceSource } from '../../src/shared/intelligence';
 import { parsePageMetrics } from '../../src/worker/crawlers/parser';
 
@@ -138,6 +138,14 @@ describe('request validation and availability', () => {
       expect(() => validateIntelligenceRequest({ action: 'page_inspection', url }, { websiteDomain: 'example.com', config: noKeys }))
         .toThrow(/Only public HTTP or HTTPS/);
     }
+  });
+
+  it('offers only markets the keyword-metrics source accepts', () => {
+    const status = intelligenceCapabilityStatus(noKeys);
+    expect(status.markets.countries).toEqual(expect.arrayContaining(['US', 'GB', 'PL']));
+    expect(status.markets.countries.every(code => isKeywordMarketSupported({ countryCode: code, languageCode: 'en' }))).toBe(true);
+    expect(status.markets.languages).toEqual(expect.arrayContaining(['en', 'pl']));
+    expect(status.markets.languages.every(code => isKeywordMarketSupported({ countryCode: 'US', languageCode: code }))).toBe(true);
   });
 
   it('marks Google Ads actions unavailable without credentials and keeps local page checks available', () => {

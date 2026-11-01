@@ -82,6 +82,7 @@ wrangler d1 execute roundseo-local --local --file=migrations/008_performance_aud
 wrangler d1 execute roundseo-local --local --file=migrations/009_dataforseo_runs.sql
 wrangler d1 execute roundseo-local --local --file=migrations/010_intelligence_platform.sql
 wrangler d1 execute roundseo-local --local --file=migrations/011_native_intelligence.sql
+wrangler d1 execute roundseo-local --local --file=migrations/012_website_media.sql
 ```
 
 **Verify migrations worked:**

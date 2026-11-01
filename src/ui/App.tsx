@@ -25,6 +25,7 @@ import {
   type RetentionCohortRecord,
 } from '../shared/analytics-intelligence';
 import { compareAuditIssues, type IssueComparison } from '../shared/audit-issue-intelligence';
+import type { WebsiteMedia, WebsiteMediaItem } from '../shared/website-media';
 import {
   AnswerEnginePanel,
   KeywordIntelligencePanel,
@@ -408,6 +409,9 @@ function comparePages(before: PageRecord[], after: PageRecord[]): Change[] {
 export default function App() {
   const [user, setUser] = useState<User | null>(() => { const stored = readJson<User | null>('roundseo-user', null); return stored && typeof stored.name === 'string' && typeof stored.email === 'string' ? stored : null; });
   const [websites, setWebsites] = useState<Website[]>(loadWebsites);
+  const [media, setMedia] = useState<Record<string, WebsiteMedia>>({});
+  const [refreshingMedia, setRefreshingMedia] = useState(false);
+  const mediaRequested = useRef<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(() => readJson<string | null>('roundseo-selected', null));
   const [route, setRoute] = useState<LocationRoute>(readLocationRoute);
   const [addOpen, setAddOpen] = useState(false);
@@ -421,17 +425,44 @@ export default function App() {
   });
   useEffect(() => { writeStoredJson('roundseo-websites', websites); }, [websites]);
   // Once an account has an API token, its websites join the local portfolio without replacing local entries.
+  /** Capture the favicon and preview for one API website, then keep the stored state. */
+  const refreshWebsiteMediaFor = async (websiteId: string) => {
+    const token = readJson<string>('roundseo-token', '');
+    if (!token) return;
+    const response = await fetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/media/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) return;
+    const body = await response.json() as { media: WebsiteMedia };
+    setMedia(current => ({ ...current, [websiteId]: body.media }));
+  };
+  const refreshAllMedia = async () => {
+    setRefreshingMedia(true);
+    try {
+      for (const site of websites.filter(isAccountWebsite)) await refreshWebsiteMediaFor(site.id);
+    } finally {
+      setRefreshingMedia(false);
+    }
+  };
   useEffect(() => {
     const token = readJson<string>('roundseo-token', '');
     if (!user || !token) return undefined;
     let cancelled = false;
-    void loadApiWebsites(token).then(remote => {
-      if (cancelled || remote.length === 0) return;
-      setWebsites(current => {
-        const known = new Set(current.map(site => site.id));
-        const added = remote.filter(site => !known.has(site.id));
-        return added.length ? [...current, ...added] : current;
-      });
+    void loadApiWebsites(token).then(async ({ sites, media: remoteMedia }) => {
+      if (cancelled) return;
+      if (sites.length > 0) {
+        setWebsites(current => {
+          const known = new Set(current.map(site => site.id));
+          const added = sites.filter(site => !known.has(site.id));
+          return added.length ? [...current, ...added] : current;
+        });
+      }
+      setMedia(current => ({ ...current, ...Object.fromEntries(remoteMedia.map(entry => [entry.websiteId, entry])) }));
+      // First sight of a website: capture its favicon and preview once, so the portfolio is never left blank.
+      for (const entry of remoteMedia) {
+        const uncaptured = !entry.favicon?.capturedAt && !entry.thumbnail?.capturedAt;
+        if (cancelled || !uncaptured || mediaRequested.current.has(entry.websiteId)) continue;
+        mediaRequested.current.add(entry.websiteId);
+        await refreshWebsiteMediaFor(entry.websiteId);
+      }
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [user]);
@@ -579,19 +610,39 @@ export default function App() {
   const updateAction = (websiteId: string, actionId: string, update: Partial<Action>) => setWebsites(current => current.map(site => site.id !== websiteId || !site.result ? site : { ...site, result: { ...site.result, actions: site.result.actions.map(action => action.id === actionId ? { ...action, ...update } : action) } }));
   if (!user) return <AuthScreen onComplete={next => { writeStoredJson('roundseo-user', next); setUser(next); }} />;
   const org = { id: 'org_local', name: user.name };
-  return <div className="product-shell"><AppNav user={user} websites={websites} selected={selected?.id || null} onOverview={goPortfolio} onSelect={websiteId => { const site = websites.find(item => item.id === websiteId); if (site) openSite(site); }} onAdd={() => setAddOpen(true)} onTeam={() => setTeamOpen(true)} onSignOut={signOut} /><main className="workspace">{selected ? <AuditWorkspace website={selected} section={route.section} selectedPageUrl={route.pageUrl} intelligenceTab={route.intelligenceTab} onBack={goPortfolio} onNavigate={(section, pageUrl, intelligenceTab) => openSite(selected, section, pageUrl, intelligenceTab)} onRun={() => runAudit(selected)} onRunPerformance={url => runPerformanceAudit(selected, url)} onRunRealUserPageLoading={() => runRealUserPageLoading(selected)} onUpdateAction={(actionId, update) => updateAction(selected.id, actionId, update)} /> : <Portfolio websites={filteredWebsites} searchQuery={searchQuery} onSearchChange={setSearchQuery} sortBy={sortBy} onSortChange={setSortBy} onAdd={() => setAddOpen(true)} onSelect={websiteId => { const site = websites.find(item => item.id === websiteId); if (site) openSite(site); }} onRun={runAudit} onDelete={deleteSite} />}</main>{addOpen && <AddSite onClose={() => setAddOpen(false)} onSubmit={addSite} />}{teamOpen && <TeamManager orgId={org.id} onClose={() => setTeamOpen(false)} />}</div>;
+  return <div className="product-shell"><AppNav user={user} websites={websites} selected={selected?.id || null} onOverview={goPortfolio} onSelect={websiteId => { const site = websites.find(item => item.id === websiteId); if (site) openSite(site); }} onAdd={() => setAddOpen(true)} onTeam={() => setTeamOpen(true)} onSignOut={signOut} /><main className="workspace">{selected ? <AuditWorkspace website={selected} section={route.section} selectedPageUrl={route.pageUrl} intelligenceTab={route.intelligenceTab} onBack={goPortfolio} onNavigate={(section, pageUrl, intelligenceTab) => openSite(selected, section, pageUrl, intelligenceTab)} onRun={() => runAudit(selected)} onRunPerformance={url => runPerformanceAudit(selected, url)} onRunRealUserPageLoading={() => runRealUserPageLoading(selected)} onUpdateAction={(actionId, update) => updateAction(selected.id, actionId, update)} /> : <Portfolio websites={filteredWebsites} searchQuery={searchQuery} onSearchChange={setSearchQuery} sortBy={sortBy} onSortChange={setSortBy} onAdd={() => setAddOpen(true)} onSelect={websiteId => { const site = websites.find(item => item.id === websiteId); if (site) openSite(site); }} onRun={runAudit} onDelete={deleteSite} media={media} refreshingMedia={refreshingMedia} onRefreshMedia={() => void refreshAllMedia()} />}</main>{addOpen && <AddSite onClose={() => setAddOpen(false)} onSubmit={addSite} />}{teamOpen && <TeamManager orgId={org.id} onClose={() => setTeamOpen(false)} />}</div>;
 }
 
 function AppNav({ user, websites, selected, onOverview, onSelect, onAdd, onTeam, onSignOut }: { user: User; websites: Website[]; selected: string | null; onOverview: () => void; onSelect: (id: string) => void; onAdd: () => void; onTeam: () => void; onSignOut: () => void }) {
   return <aside className="app-nav"><button className="nav-brand" onClick={onOverview}><span className="logo">R</span><strong>RoundSEO</strong></button><div className="workspace-user"><span>{user.name[0]?.toUpperCase() || 'R'}</span><div><small>Workspace</small><strong>{user.name}</strong></div></div><nav aria-label="Workspace navigation"><button className={!selected ? 'selected' : ''} onClick={onOverview}><Icon name="home" />Portfolio</button><span className="nav-label">Managed sites ({websites.length})</span>{websites.slice(0, 8).map(site => <button key={site.id} className={selected === site.id ? 'selected site-link' : 'site-link'} onClick={() => onSelect(site.id)}><span className="site-dot">{site.domain[0]?.toUpperCase()}</span><span>{site.name}</span>{site.result && <em>{site.result.issues}</em>}</button>)}{websites.length > 8 && <small className="nav-more">+{websites.length - 8} more</small>}<button className="add-site-link" onClick={onAdd}><Icon name="plus" />Add website</button></nav><div className="nav-footer"><button onClick={onTeam}><Icon name="search" />Team</button><button onClick={onSignOut}><Icon name="logout" />Sign out</button></div></aside>;
 }
 
-function Portfolio({ websites, searchQuery, onSearchChange, sortBy, onSortChange, onAdd, onSelect, onRun, onDelete }: { websites: Website[]; searchQuery: string; onSearchChange: (q: string) => void; sortBy: string; onSortChange: (s: string) => void; onAdd: () => void; onSelect: (id: string) => void; onRun: (site: Website) => void; onDelete: (id: string) => void }) {
+/** The site's favicon when one was captured, otherwise the domain's letter. */
+function SiteFavicon({ item, letter }: { item: WebsiteMediaItem | null | undefined; letter: string | undefined }) {
+  const [failed, setFailed] = useState(false);
+  if (item?.url && !failed) return <img className="site-favicon" src={item.url} alt="" width={20} height={20} loading="lazy" onError={() => setFailed(true)} />;
+  return <span className="site-dot" aria-hidden="true">{letter}</span>;
+}
+
+/** Websites saved to the account have a server id; browser-only entries do not, so no media can be captured for them. */
+function isAccountWebsite(site: Website): boolean {
+  return site.id.startsWith('web_');
+}
+
+/** A small page preview when one was captured, otherwise a placeholder that says why. The row's name already labels it, so it is decorative for assistive tech. */
+function SiteThumbnail({ item, label, savedToAccount }: { item: WebsiteMediaItem | null | undefined; label: string; savedToAccount: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (item?.url && !failed) return <span className="site-thumb" title={`Preview of ${label}`} aria-hidden="true"><img src={item.url} alt="" width={96} height={60} loading="lazy" onError={() => setFailed(true)} /></span>;
+  const reason = item?.reason || (savedToAccount ? 'Preview not captured yet' : 'Saved only in this browser, so no preview yet');
+  return <span className="site-thumb is-empty" aria-hidden="true" title={reason}>{label.slice(0, 1).toUpperCase()}</span>;
+}
+
+function Portfolio({ websites, searchQuery, onSearchChange, sortBy, onSortChange, onAdd, onSelect, onRun, onDelete, media, refreshingMedia, onRefreshMedia }: { websites: Website[]; searchQuery: string; onSearchChange: (q: string) => void; sortBy: string; onSortChange: (s: string) => void; onAdd: () => void; onSelect: (id: string) => void; onRun: (site: Website) => void; onDelete: (id: string) => void; media: Record<string, WebsiteMedia>; refreshingMedia: boolean; onRefreshMedia: () => void }) {
   const completed = websites.filter(site => site.result).length;
   const actions = websites.reduce((total, site) => total + (site.result?.actions.filter(action => ['open', 'recurring', 'in_progress'].includes(action.status)).length || 0), 0);
   const [deleteTarget, setDeleteTarget] = useState<Website | null>(null);
   const confirmDelete = () => { if (!deleteTarget) return; onDelete(deleteTarget.id); setDeleteTarget(null); };
-  return <><header className="workspace-header"><div><h1>Portfolio</h1><p>{websites.length} website{websites.length !== 1 ? 's' : ''} {searchQuery && `matching "${searchQuery}"`}</p></div><button className="button solid" onClick={onAdd}><Icon name="plus" />Add website</button></header><section className="portfolio-controls"><input type="text" className="search-input" placeholder="🔍 Search by name or domain..." value={searchQuery} onChange={e => onSearchChange(e.target.value)} /><select className="sort-select" value={sortBy} onChange={e => onSortChange(e.target.value)}><option value="created_at">Recently added</option><option value="name">Name (A–Z)</option><option value="domain">Domain</option></select></section><section className="portfolio-summary" aria-label="Portfolio summary"><div><span>Audited</span><strong>{completed}</strong></div><div><span>Listed</span><strong>{websites.length}</strong></div><div><span>Issues</span><strong>{actions}</strong></div></section>{websites.length === 0 ? <section className="first-site"><span className="large-icon"><Icon name="globe" /></span><h2>Start with one website.</h2><p>Add a public site, tell us a little about it, then run the first evidence-led crawl. You will always see what was measured and what still needs a connection.</p><button className="button solid" onClick={onAdd}>Add a website <Icon name="arrow" /></button></section> : <section className="site-table" aria-label="Managed websites"><div className="table-head"><span>Website</span><span>Search & outcomes</span><span>Current attention</span><span>Freshness</span><span>Actions</span></div>{websites.map(site => <div className="site-row" key={site.id}><button className="site-name" onClick={() => onSelect(site.id)}><span className="site-dot">{site.domain[0]?.toUpperCase()}</span><span><strong>{site.name}</strong><small>{site.domain}</small></span></button><span className="source-cell">{site.result ? <><strong>Not connected</strong><small>Connect Search Console and analytics</small></> : <span className="quiet">No baseline yet</span>}</span><span className="attention-cell">{site.result ? <><strong>{site.result.actions.filter(action => ['open', 'recurring', 'in_progress'].includes(action.status)).length} actions</strong><small>{technicalHealthLabel(site.result.technicalHealth)}</small></> : <span className="quiet">—</span>}</span><span className="freshness-cell">{site.result ? <><strong>{coverageLabel(site.result.crawlCoverage.availability)}</strong><small>{site.result.checkedAt}</small></> : <span className="quiet">Not run</span>}</span><span className="site-row-actions">{site.status === 'running' ? <span className="quiet">Crawling…</span> : <button className="row-action" onClick={() => site.result ? onSelect(site.id) : onRun(site)}>{site.result ? 'Open workspace' : 'Run baseline'} <Icon name="arrow" /></button>}<button className="delete-site-button" onClick={() => setDeleteTarget(site)} aria-label={`Delete ${site.name}`}><Icon name="trash" />Delete</button></span></div>)}</section>}{deleteTarget && <DeleteSiteDialog site={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={confirmDelete} />}</>;
+  return <><header className="workspace-header"><div><h1>Portfolio</h1><p>{websites.length} website{websites.length !== 1 ? 's' : ''} {searchQuery && `matching "${searchQuery}"`}</p></div><button className="button solid" onClick={onAdd}><Icon name="plus" />Add website</button></header><section className="portfolio-controls"><input type="text" className="search-input" placeholder="🔍 Search by name or domain..." value={searchQuery} onChange={e => onSearchChange(e.target.value)} /><select className="sort-select" value={sortBy} onChange={e => onSortChange(e.target.value)}><option value="created_at">Recently added</option><option value="name">Name (A–Z)</option><option value="domain">Domain</option></select><button className="button outline small" onClick={onRefreshMedia} disabled={refreshingMedia}>{refreshingMedia ? 'Refreshing previews…' : 'Refresh previews'}</button></section><section className="portfolio-summary" aria-label="Portfolio summary"><div><span>Audited</span><strong>{completed}</strong></div><div><span>Listed</span><strong>{websites.length}</strong></div><div><span>Issues</span><strong>{actions}</strong></div></section>{websites.length === 0 ? <section className="first-site"><span className="large-icon"><Icon name="globe" /></span><h2>Start with one website.</h2><p>Add a public site, tell us a little about it, then run the first evidence-led crawl. You will always see what was measured and what still needs a connection.</p><button className="button solid" onClick={onAdd}>Add a website <Icon name="arrow" /></button></section> : <section className="site-table" aria-label="Managed websites"><div className="table-head"><span>Website</span><span>Search & outcomes</span><span>Current attention</span><span>Freshness</span><span>Actions</span></div>{websites.map(site => <div className="site-row" key={site.id}><button className="site-name" onClick={() => onSelect(site.id)}><SiteThumbnail item={media[site.id]?.thumbnail} label={site.domain} savedToAccount={isAccountWebsite(site)} /><span><span className="site-title"><SiteFavicon item={media[site.id]?.favicon} letter={site.domain[0]?.toUpperCase()} /><strong>{site.name}</strong></span><small>{site.domain}</small></span></button><span className="source-cell">{site.result ? <><strong>Not connected</strong><small>Connect Search Console and analytics</small></> : <span className="quiet">No baseline yet</span>}</span><span className="attention-cell">{site.result ? <><strong>{site.result.actions.filter(action => ['open', 'recurring', 'in_progress'].includes(action.status)).length} actions</strong><small>{technicalHealthLabel(site.result.technicalHealth)}</small></> : <span className="quiet">—</span>}</span><span className="freshness-cell">{site.result ? <><strong>{coverageLabel(site.result.crawlCoverage.availability)}</strong><small>{site.result.checkedAt}</small></> : <span className="quiet">Not run</span>}</span><span className="site-row-actions">{site.status === 'running' ? <span className="quiet">Crawling…</span> : <button className="row-action" onClick={() => site.result ? onSelect(site.id) : onRun(site)}>{site.result ? 'Open workspace' : 'Run baseline'} <Icon name="arrow" /></button>}<button className="delete-site-button" onClick={() => setDeleteTarget(site)} aria-label={`Delete ${site.name}`}><Icon name="trash" />Delete</button></span></div>)}</section>}{deleteTarget && <DeleteSiteDialog site={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={confirmDelete} />}</>;
 }
 
 function DeleteSiteDialog({ site, onCancel, onConfirm }: { site: Website; onCancel: () => void; onConfirm: () => void }) {
@@ -1504,21 +1555,29 @@ function StatusPill({ good, label }: { good: boolean; label: string }) { return 
 function EvidenceBadge({ kind, label }: { kind: 'observed' | 'provider' | 'sampled' | 'inferred'; label: string }) { return <span className={`evidence-badge ${kind}`}>{label}</span>; }
 
 /** The signed-in account's websites from the API, so Intelligence targets the same IDs the Worker stores. */
-async function loadApiWebsites(token: string): Promise<Website[]> {
+async function loadApiWebsites(token: string): Promise<{ sites: Website[]; media: WebsiteMedia[] }> {
   const headers = { Authorization: `Bearer ${token}` };
   const organizations = await fetch('/api/v2/organizations', { headers });
-  if (!organizations.ok) return [];
+  if (!organizations.ok) return { sites: [], media: [] };
   const body = await organizations.json() as { organizations?: Array<{ id: string }> };
   const sites: Website[] = [];
+  const media: WebsiteMedia[] = [];
   for (const organization of body.organizations ?? []) {
-    const response = await fetch(`/api/v2/organizations/${encodeURIComponent(organization.id)}/websites`, { headers });
-    if (!response.ok) continue;
-    const list = await response.json() as { websites?: Array<{ id: string; name: string; domain: string; url: string; createdAt?: string }> };
-    for (const site of list.websites ?? []) {
-      sites.push({ id: site.id, name: site.name, domain: site.domain, url: site.url, status: 'ready', created_at: site.createdAt });
+    const id = encodeURIComponent(organization.id);
+    const [websitesResponse, mediaResponse] = await Promise.all([
+      fetch(`/api/v2/organizations/${id}/websites`, { headers }),
+      fetch(`/api/v2/organizations/${id}/website-media`, { headers }),
+    ]);
+    if (websitesResponse.ok) {
+      const list = await websitesResponse.json() as { websites?: Array<{ id: string; name: string; domain: string; url: string; createdAt?: string }> };
+      for (const site of list.websites ?? []) sites.push({ id: site.id, name: site.name, domain: site.domain, url: site.url, status: 'ready', created_at: site.createdAt });
+    }
+    if (mediaResponse.ok) {
+      const list = await mediaResponse.json() as { media?: WebsiteMedia[] };
+      media.push(...(list.media ?? []));
     }
   }
-  return sites;
+  return { sites, media };
 }
 
 function AuthScreen({ onComplete }: { onComplete: (user: User) => void }) {

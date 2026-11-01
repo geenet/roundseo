@@ -257,6 +257,13 @@ components:
               available: { type: boolean }
               reason: { type: [string, 'null'] }
               sources: { type: array, items: { type: string } }
+        markets:
+          type: object
+          required: [countries, languages]
+          description: Countries and languages the keyword-metrics source serves
+          properties:
+            countries: { type: array, items: { type: string, pattern: '^[A-Z]{2}$' } }
+            languages: { type: array, items: { type: string } }
         safeguards:
           type: object
           required: [maximumSiteCrawlPages, maximumLiveRequestsPerDay]

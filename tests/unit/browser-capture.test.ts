@@ -19,6 +19,7 @@ describe('browser capture requests', () => {
     expect(parseRenderRequest({ url: 'https://example.com/', countryCode: 'pl', languageCode: 'PL' })).toEqual({
       url: 'https://example.com/', device: 'desktop', countryCode: 'PL', languageCode: 'pl',
     });
-    expect(parseScreenshotRequest({ url: 'https://example.com/' })).toEqual({ url: 'https://example.com/', device: 'desktop', fullPage: true });
+    expect(parseScreenshotRequest({ url: 'https://example.com/' })).toEqual({ url: 'https://example.com/', device: 'desktop', fullPage: true, thumbnail: false });
+    expect(parseScreenshotRequest({ url: 'https://example.com/', thumbnail: true })).toMatchObject({ thumbnail: true });
   });
 });

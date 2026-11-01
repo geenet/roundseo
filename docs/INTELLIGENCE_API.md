@@ -64,7 +64,9 @@ limitations), `coverage` for SERP runs (`complete`, `partial`, `blocked`, or
 ## Actions
 
 Market fields are `countryCode` (two letters, such as `US`) and `languageCode`
-(such as `en`). Domains must be the website's own domain.
+(such as `en`). Domains must be the website's own domain. The status response's
+`markets` object lists the countries and languages the keyword-metrics source serves;
+the workspace offers exactly these in its dropdowns.
 
 - `keyword_discovery`: `seeds` (1–20), `limit` (1–1000, default 100)
 - `keyword_overview`: `keywords` (1–50)
@@ -107,6 +109,36 @@ evidence carries a signed URL that expires after five minutes:
 `/api/v2/websites/{websiteId}/intelligence/assets/{assetId}?expires=…&sig=…`.
 Tampered, expired, or unknown signatures return `404`.
 
+## Website media
+
+Each website shows its favicon and a small page preview in the portfolio. The
+Worker captures both, stores the image bytes in R2, and gives the browser only
+signed, short-lived URLs.
+
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v2/organizations/{organizationId}/website-media` | Organization members | Favicon and preview state for every website in the organization |
+| `POST` | `/api/v2/websites/{websiteId}/media/refresh` | Owners, admins, managers | Capture the favicon and preview again and return the new state |
+| `GET` | `/api/v2/websites/{websiteId}/media/favicon` | Signed URL | Serve the stored favicon |
+| `GET` | `/api/v2/websites/{websiteId}/media/thumbnail` | Signed URL | Serve the stored preview |
+
+Each media item has `kind` (`favicon` or `thumbnail`), `status`, `url`, `width`,
+`height`, `capturedAt`, and `reason`. `status` is `available`, `missing`,
+`unavailable`, or `failed`. `url` is set only when `status` is `available`. Every
+other status comes with a `reason` in plain language. A website that has never
+been captured reports `missing` with `Not captured yet.`
+
+- **Favicon.** RoundSEO reads the icons the page declares (`rel` containing
+  `icon` or `apple-touch-icon`), then tries `/favicon.ico`. It checks at most four
+  candidates and accepts PNG, JPEG, GIF, WebP, or ICO up to 256 KB. SVG icons are
+  skipped.
+- **Preview.** The browser runner renders the home page at 1280×800 and stores a
+  640×400 PNG of up to 1 MB. Previews need `ROUNDSEO_PERFORMANCE_RUNNER_URL`.
+
+Signed image URLs expire after one hour. Images are served with
+`Cache-Control: private, max-age=300`. A missing, expired, or tampered signature
+returns `404`.
+
 ## Errors
 
 | Code | Status | Meaning |
@@ -120,6 +152,7 @@ Tampered, expired, or unknown signatures return `404`.
 | `INVALID_MODEL` / `INVALID_PROMPT` | 400 | Answer request is invalid |
 | `INVALID_APP_ID` | 400 | App ID does not match the marketplace format |
 | `INTELLIGENCE_ROLE_REQUIRED` | 403 | Caller cannot start collection |
+| `WEBSITE_ROLE_REQUIRED` | 403 | Caller cannot refresh website media |
 | `APP_NOT_FOUND` | 404 | App is not listed in that market |
 | `IDEMPOTENCY_CONFLICT` | 409 | Key reused with a different body |
 | `INTELLIGENCE_RUN_ACTIVE` / `INTELLIGENCE_RUN_INACTIVE` | 409 | Run is in the wrong state for the action |
@@ -148,9 +181,13 @@ Set these as secrets with `wrangler secret put <NAME>` for deployed Workers, or 
   (at least 24 characters). The runner exposes `/render` and `/screenshot` as
   well as `/audit`.
 - Screenshots: an R2 binding (`R2`) and, optionally, `INTELLIGENCE_ASSET_SECRET`
-  (falls back to `JWT_SECRET`).
+  (falls back to `JWT_SECRET`). Website favicons and previews use the same R2
+  binding and signing secret. Without R2 they report `unavailable`.
 - Ceilings: `INTELLIGENCE_DAILY_REQUEST_LIMIT` (default 500 per website per UTC day)
   and `INTELLIGENCE_MAX_SITE_CRAWL_PAGES` (default 500, hard limit 2000).
 
 Migration `011_native_intelligence.sql` adds the native tables and columns. Apply
 it once. It is not idempotent because it uses `ALTER TABLE`.
+
+Migration `012_website_media.sql` adds the `website_media` table for favicons and
+previews. It uses `CREATE TABLE IF NOT EXISTS`, so re-running it is safe.

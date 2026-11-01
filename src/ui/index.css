@@ -74,6 +74,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .site-name { display: flex; align-items: center; gap: 11px; min-width: 0; padding: 0; border: 0; color: #243d40; background: transparent; text-align: left; }
 .site-name > span:last-child { display: grid; min-width: 0; gap: 4px; }
 .site-name strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.site-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.site-favicon { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 5px; object-fit: contain; background: #fff; box-shadow: 0 0 0 1px rgba(36, 61, 64, .10); }
+.site-thumb { position: relative; flex: 0 0 auto; display: block; width: 96px; height: 60px; overflow: hidden; border: 1px solid #cfdcd8; border-radius: 8px; background: #e9f1ee; box-shadow: 0 1px 2px rgba(36, 61, 64, .08); }
+.site-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; transition: transform .25s ease; }
+.site-row:hover .site-thumb img { transform: scale(1.03); }
+.site-thumb.is-empty { display: grid; place-items: center; background: linear-gradient(135deg, #e3efea 0%, #cfe5dc 100%); color: #2c6157; font-family: Newsreader, Georgia, serif; font-size: 20px; font-weight: 600; }
+@media (max-width: 640px) { .site-thumb { width: 72px; height: 45px; border-radius: 6px; } }
 .site-name small, .source-cell small, .attention-cell small, .freshness-cell small { color: #7f908e; font-size: 10px; line-height: 1.4; }
 .source-cell, .attention-cell, .freshness-cell { display: grid; gap: 3px; min-width: 0; }
 .source-cell strong, .attention-cell strong, .freshness-cell strong { color: #39575a; font-size: 11px; }
@@ -617,9 +624,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .member-row span { display: grid; gap: 2px; }
 .member-row small { font-size: 11px; color: #6b7280; }
 .role-badge { display: inline-block; padding: 4px 8px; background: #eff6ff; color: #1e40af; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
-.portfolio-controls { display: flex; gap: 12px; margin: 20px 0; }
+.portfolio-controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
+.portfolio-controls .button { white-space: nowrap; }
 .search-input, .sort-select { padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px; font-family: inherit; }
-.search-input { flex: 1; }
+.search-input { flex: 1 1 220px; min-width: 0; }
 .search-input::placeholder { color: #9ca3af; }
 }
 

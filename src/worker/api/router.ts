@@ -41,6 +41,9 @@ import {
   type IntelligenceRunRecord,
 } from '../services/intelligence-store';
 import { readIntelligenceConfig } from '../intelligence/config';
+import { assetSignature, signedAssetUrl, verifyAssetSignature } from '../services/signed-assets';
+import { captureWebsiteMedia, listWebsiteMedia, mediaItem, storedKey } from '../services/website-media';
+import type { WebsiteMedia, WebsiteMediaItem, WebsiteMediaKind } from '../../shared/website-media';
 import { IntelligenceError, publicIntelligenceError } from '../intelligence/errors';
 import { domainOf } from '../intelligence/html';
 import type { ActionStatus } from '../../shared/operating-model';
@@ -798,10 +801,8 @@ async function serveSignedIntelligenceAsset(request: Request, db: any, env: any,
   });
 }
 
-async function intelligenceAssetSignature(secret: string, websiteId: string, assetId: string, expires: number): Promise<string> {
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${websiteId}:${assetId}:${expires}`));
-  return [...new Uint8Array(signed)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+function intelligenceAssetSignature(secret: string, websiteId: string, assetId: string, expires: number): Promise<string> {
+  return assetSignature(secret, 'intelligence-asset', websiteId, assetId, expires);
 }
 
 function constantTimeStringEqual(left: string, right: string): boolean {
@@ -921,6 +922,11 @@ export async function routeRequest(request: Request, db: any, env: any, ctx?: Wa
   const response = await handleSeoRoutes(pathname, request, env);
   if (response) return response;
 
+  // Website media (favicon and preview) has its own routes and signed serving.
+  if (/^\/api\/v2\/organizations\/[^/]+\/website-media$/.test(pathname) || /^\/api\/v2\/websites\/[^/]+\/media\/(?:refresh|favicon|thumbnail)$/.test(pathname)) {
+    return handleWebsiteMediaRoutes(pathname, request, db, env);
+  }
+
   // Select the owning handler before authentication, including public report views.
   if (pathname.startsWith('/api/v2/auth/')) return handleAuthRoutes(pathname, request, db, env);
   if (/^\/api\/v2\/organizations(?:\/[^/]+)?$/.test(pathname)) return handleOrgRoutes(pathname, request, db, env);
@@ -936,4 +942,93 @@ export async function routeRequest(request: Request, db: any, env: any, ctx?: Wa
   }
 
   return null;
+}
+
+const WEBSITE_MEDIA_TTL_SECONDS = 60 * 60;
+const WEBSITE_MEDIA_PATH = /^\/api\/v2\/websites\/([^/]+)\/media\/(favicon|thumbnail)$/;
+
+async function handleWebsiteMediaRoutes(pathname: string, request: Request, db: any, env: any): Promise<Response | null> {
+  const served = pathname.match(WEBSITE_MEDIA_PATH);
+  if (served && request.method === 'GET') {
+    return serveSignedWebsiteMedia(request, db, env, decodePathPart(served[1]), served[2] as WebsiteMediaKind);
+  }
+  const { auth, error } = await requireAuth(request, env);
+  if (error || !auth) return jsonResponse({ error }, 401);
+  try {
+    const listMatch = pathname.match(/^\/api\/v2\/organizations\/([^/]+)\/website-media$/);
+    if (listMatch && request.method === 'GET') {
+      const organizationId = decodePathPart(listMatch[1]);
+      if (!(await canAccessOrganization(db, auth.userId, organizationId))) return resourceNotFound();
+      return jsonResponse({ media: await organizationWebsiteMedia(db, organizationId, request.url, env) });
+    }
+    const refreshMatch = pathname.match(/^\/api\/v2\/websites\/([^/]+)\/media\/refresh$/);
+    if (refreshMatch && request.method === 'POST') {
+      const websiteId = decodePathPart(refreshMatch[1]);
+      if (!(await canAccessWebsite(db, auth.userId, websiteId))) return resourceNotFound();
+      // Owners, admins, and managers may run collection for the organization; read-only members may not.
+      if (!(await canRunWebsiteIntelligence(db, auth.userId, websiteId))) {
+        return jsonResponse({ error: 'Refreshing previews requires an organization owner, admin, or manager.', code: 'WEBSITE_ROLE_REQUIRED' }, 403);
+      }
+      const website = await getWebsite(db, websiteId);
+      if (!website) return resourceNotFound();
+      const captured = await captureWebsiteMedia({ db, websiteId, websiteUrl: website.url, config: readIntelligenceConfig(env) });
+      return jsonResponse({ media: await signWebsiteMedia(captured, request.url, env) });
+    }
+    return null;
+  } catch (mediaError) {
+    return intelligenceErrorResponse(mediaError);
+  }
+}
+
+async function organizationWebsiteMedia(db: any, organizationId: string, requestUrl: string, env: any): Promise<WebsiteMedia[]> {
+  const rows = await db.prepare('SELECT id FROM websites WHERE organization_id = ? ORDER BY created_at ASC').bind(organizationId).all();
+  const websiteIds = ((rows?.results ?? rows ?? []) as Array<{ id: string }>).map(row => String(row.id));
+  const stored = await listWebsiteMedia(db, websiteIds);
+  const media: WebsiteMedia[] = [];
+  for (const websiteId of websiteIds) {
+    const entry = stored.get(websiteId) ?? { favicon: null, thumbnail: null };
+    media.push({
+      websiteId,
+      favicon: await signedMediaItem(entry.favicon, 'favicon', websiteId, requestUrl, env),
+      thumbnail: await signedMediaItem(entry.thumbnail, 'thumbnail', websiteId, requestUrl, env),
+    });
+  }
+  return media;
+}
+
+async function signedMediaItem(row: Parameters<typeof mediaItem>[0], kind: WebsiteMediaKind, websiteId: string, requestUrl: string, env: any): Promise<WebsiteMediaItem> {
+  const secret = readIntelligenceConfig(env).assetSecret;
+  const url = storedKey(row) && secret
+    ? await signedAssetUrl(requestUrl, `/api/v2/websites/${encodeURIComponent(websiteId)}/media/${kind}`, secret, 'website-media', websiteId, kind, WEBSITE_MEDIA_TTL_SECONDS)
+    : null;
+  return mediaItem(row, kind, url);
+}
+
+async function signWebsiteMedia(media: WebsiteMedia, requestUrl: string, env: any): Promise<WebsiteMedia> {
+  const sign = async (item: WebsiteMediaItem | null): Promise<WebsiteMediaItem | null> => {
+    if (!item || item.status !== 'available') return item;
+    const secret = readIntelligenceConfig(env).assetSecret;
+    const url = secret ? await signedAssetUrl(requestUrl, `/api/v2/websites/${encodeURIComponent(media.websiteId)}/media/${item.kind}`, secret, 'website-media', media.websiteId, item.kind, WEBSITE_MEDIA_TTL_SECONDS) : null;
+    return { ...item, url };
+  };
+  return { ...media, favicon: await sign(media.favicon), thumbnail: await sign(media.thumbnail) };
+}
+
+async function serveSignedWebsiteMedia(request: Request, db: any, env: any, websiteId: string, kind: WebsiteMediaKind): Promise<Response> {
+  const url = new URL(request.url);
+  const config = readIntelligenceConfig(env);
+  if (!config.assetSecret || !config.assetStore) return resourceNotFound();
+  const valid = await verifyAssetSignature(config.assetSecret, 'website-media', websiteId, kind, Number(url.searchParams.get('expires')), url.searchParams.get('sig') || '', WEBSITE_MEDIA_TTL_SECONDS);
+  if (!valid) return resourceNotFound();
+  const row = await db.prepare('SELECT status, storage_key, content_type FROM website_media WHERE website_id = ? AND kind = ?').bind(websiteId, kind).first();
+  if (!row || row.status !== 'available' || !row.storage_key) return resourceNotFound();
+  const object = await config.assetStore.get(String(row.storage_key));
+  if (!object) return resourceNotFound();
+  return new Response(object.body, {
+    headers: {
+      'Content-Type': String(row.content_type || 'application/octet-stream'),
+      'Cache-Control': 'private, max-age=300',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }

@@ -22,6 +22,8 @@ export interface ScreenshotRequest {
   url: string;
   device: CaptureDevice;
   fullPage: boolean;
+  /** Small preview: a fixed 1280x800 viewport captured at half scale, for lists and cards. */
+  thumbnail: boolean;
 }
 
 export interface RenderResult {
@@ -48,6 +50,7 @@ export function captureRequestProblem(value: unknown): string | null {
   if (input.countryCode !== undefined && input.countryCode !== null && !/^[A-Za-z]{2}$/.test(String(input.countryCode))) return 'countryCode must be a two-letter code.';
   if (input.languageCode !== undefined && input.languageCode !== null && !/^[A-Za-z]{2}(?:-[A-Za-z]{2})?$/.test(String(input.languageCode))) return 'languageCode must be a language code.';
   if (input.fullPage !== undefined && typeof input.fullPage !== 'boolean') return 'fullPage must be true or false.';
+  if (input.thumbnail !== undefined && typeof input.thumbnail !== 'boolean') return 'thumbnail must be true or false.';
   return null;
 }
 
@@ -65,6 +68,7 @@ export function parseScreenshotRequest(value: Record<string, unknown>): Screensh
     url: String(value.url),
     device: (value.device as CaptureDevice | undefined) ?? 'desktop',
     fullPage: value.fullPage !== false,
+    thumbnail: value.thumbnail === true,
   };
 }
 
@@ -76,7 +80,7 @@ export async function renderPage(input: RenderRequest): Promise<RenderResult> {
 }
 
 export async function screenshotPage(input: ScreenshotRequest): Promise<ScreenshotResult> {
-  return withPage({ device: input.device, countryCode: null, languageCode: null }, async page => {
+  return withPage({ device: input.device, countryCode: null, languageCode: null, thumbnail: input.thumbnail }, async page => {
     const bytes = await page.screenshot({ type: 'png', fullPage: input.fullPage });
     if (bytes.byteLength > MAX_SCREENSHOT_BYTES) throw new Error('The screenshot is larger than RoundSEO accepts.');
     return { finalUrl: page.url(), base64: Buffer.from(bytes).toString('base64'), contentType: 'image/png' as const };
@@ -84,7 +88,7 @@ export async function screenshotPage(input: ScreenshotRequest): Promise<Screensh
 }
 
 async function withPage<T>(
-  input: { device: CaptureDevice; countryCode: string | null; languageCode: string | null },
+  input: { device: CaptureDevice; countryCode: string | null; languageCode: string | null; thumbnail?: boolean },
   work: (page: Page) => Promise<T>,
   targetUrl: string,
 ): Promise<T> {
@@ -92,7 +96,7 @@ async function withPage<T>(
   const browser = await chromium.launch({ headless: true });
   try {
     const locale = input.languageCode && input.countryCode ? `${input.languageCode}-${input.countryCode}` : input.languageCode ?? undefined;
-    const context = await browser.newContext(contextOptions(input.device, devices, locale));
+    const context = await browser.newContext(contextOptions(input.device, devices, locale, input.thumbnail === true));
     try {
       await guardRequests(context, targetUrl);
       const page = await context.newPage();
@@ -109,10 +113,11 @@ async function withPage<T>(
 
 type Devices = Awaited<typeof import('playwright')>['devices'];
 
-function contextOptions(device: CaptureDevice, devices: Devices, locale: string | undefined) {
-  const base = device === 'mobile' ? devices['Pixel 7']
-    : device === 'tablet' ? devices['iPad (gen 7)']
-      : { viewport: { width: 1365, height: 900 } };
+function contextOptions(device: CaptureDevice, devices: Devices, locale: string | undefined, thumbnail: boolean) {
+  const base = thumbnail ? { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 0.5 }
+    : device === 'mobile' ? devices['Pixel 7']
+      : device === 'tablet' ? devices['iPad (gen 7)']
+        : { viewport: { width: 1365, height: 900 } };
   return { ...base, ...(locale ? { locale } : {}), serviceWorkers: 'block' as const };
 }
 

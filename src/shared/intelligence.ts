@@ -182,4 +182,6 @@ export interface IntelligenceCapabilityStatus {
   capabilities: IntelligenceCapability[];
   actions: IntelligenceActionStatus[];
   safeguards: { maximumSiteCrawlPages: number; maximumLiveRequestsPerDay: number };
+  /** Markets the keyword-metrics source can serve, for dropdowns in the workspace. */
+  markets: { countries: string[]; languages: string[] };
 }

@@ -399,8 +399,37 @@ function CoverageNote({ coverage }: { coverage: SerpCoverage }) {
   return <div className={`intelligence-coverage ${coverage.status}`} role="status"><strong>Coverage: {label}</strong><span>{coverage.resultsParsed} of {coverage.resultsRequested} results read{coverage.featuresDetected.length ? ` · features seen: ${coverage.featuresDetected.map(item => item.replace(/_/g, ' ')).join(', ')}` : ''}</span>{coverage.reason && <small>{coverage.reason}</small>}</div>;
 }
 
-function CountryFields({ countryCode, languageCode, onCountry, onLanguage }: { countryCode: string; languageCode: string; onCountry(value: string): void; onLanguage(value: string): void }) {
-  return <div className="intelligence-field-grid"><label>Country code<input value={countryCode} onChange={event => onCountry(event.target.value.toUpperCase())} maxLength={2} /><small>Two letters, such as US or GB. Results and volumes are for this market.</small></label><label>Language code<input value={languageCode} onChange={event => onLanguage(event.target.value)} maxLength={5} /><small>For example: en, pl, or de.</small></label></div>;
+type Choice = { value: string; label: string };
+const COUNTRY_NAMES = new Intl.DisplayNames(['en'], { type: 'region' });
+const LANGUAGE_NAMES = new Intl.DisplayNames(['en'], { type: 'language' });
+const PAGE_LIMIT_CHOICES = [10, 25, 50, 100, 250, 500, 1000, 2000];
+
+/** Dropdown choices come from the markets the server reports, so an offered market always works. */
+function marketChoices(status: IntelligenceCapabilityStatus | null): { countries: Choice[]; languages: Choice[] } {
+  const countries = status?.markets?.countries?.length ? status.markets.countries : [DEFAULT_COUNTRY];
+  const languages = status?.markets?.languages?.length ? status.markets.languages : [DEFAULT_LANGUAGE];
+  const byLabel = (left: Choice, right: Choice) => left.label.localeCompare(right.label);
+  return {
+    countries: countries.map(code => ({ value: code, label: `${COUNTRY_NAMES.of(code) ?? code} (${code})` })).sort(byLabel),
+    languages: languages.map(code => ({ value: code, label: `${LANGUAGE_NAMES.of(code) ?? code} (${code})` })).sort(byLabel),
+  };
+}
+
+function pageLimitChoices(cap: number): number[] {
+  const choices = PAGE_LIMIT_CHOICES.filter(item => item <= cap);
+  return choices.includes(cap) ? choices : [...choices, cap].sort((left, right) => left - right);
+}
+
+function CountrySelect({ status, value, onChange }: { status: IntelligenceCapabilityStatus | null; value: string; onChange(value: string): void }) {
+  return <label>Country<select value={value} onChange={event => onChange(event.target.value)}>{marketChoices(status).countries.map(choice => <option value={choice.value} key={choice.value}>{choice.label}</option>)}</select><small>Results, volumes, and store listings use this market.</small></label>;
+}
+
+function LanguageSelect({ status, value, onChange }: { status: IntelligenceCapabilityStatus | null; value: string; onChange(value: string): void }) {
+  return <label>Language<select value={value} onChange={event => onChange(event.target.value)}>{marketChoices(status).languages.map(choice => <option value={choice.value} key={choice.value}>{choice.label}</option>)}</select><small>Keyword metrics are available for the languages listed.</small></label>;
+}
+
+function MarketFields({ status, countryCode, languageCode, onCountry, onLanguage }: { status: IntelligenceCapabilityStatus | null; countryCode: string; languageCode: string; onCountry(value: string): void; onLanguage(value: string): void }) {
+  return <div className="intelligence-field-grid"><CountrySelect status={status} value={countryCode} onChange={onCountry} /><LanguageSelect status={status} value={languageCode} onChange={onLanguage} /></div>;
 }
 
 function validMarket(countryCode: string, languageCode: string): boolean {
@@ -465,7 +494,7 @@ export function KeywordIntelligencePanel({ websiteId, websiteDomain, onResults }
         {domainMode ? <label>Target domain<input value={websiteDomain} disabled /><small>Analysis is limited to this website's domain.</small></label>
           : <label>Keywords<textarea value={keywords} onChange={event => setKeywords(event.target.value)} rows={3} placeholder="technical seo audit&#10;seo reporting" /><small>Separate terms with commas or new lines.</small></label>}
       </div>
-      <CountryFields countryCode={countryCode} languageCode={languageCode} onCountry={setCountryCode} onLanguage={setLanguageCode} />
+      <MarketFields status={client.status} countryCode={countryCode} languageCode={languageCode} onCountry={setCountryCode} onLanguage={setLanguageCode} />
       <div className="import-panel-actions"><button className="button solid small" disabled={disabled}>Run keyword research</button><span>{domainMode ? `Target: ${websiteDomain}` : `${terms.length} keyword${terms.length === 1 ? '' : 's'} · ${mapped.length} saved records`}</span></div>
     </form>
     {client.currentRun && <KeywordPreview evidence={client.currentRun.evidence} />}
@@ -534,7 +563,7 @@ export function MarketAndAppIntelligencePanel({ websiteId, websiteDomain }: { we
   return <div className="intelligence-catalog-grid">
     <IntelligenceFrame client={market} action="market_categories" run={market.currentRun} title="Map this domain's market categories" description="Group the keywords RoundSEO has observed for this domain into market categories, with its share of observed keywords.">
       <form className="intelligence-run-form" onSubmit={runMarket}>
-        <div className="intelligence-field-grid"><label>Target domain<input value={websiteDomain} disabled /><small>Categories come from this website's stored SERP observations.</small></label><label>Country code<input value={countryCode} onChange={event => setCountryCode(event.target.value.toUpperCase())} maxLength={2} /></label></div>
+        <div className="intelligence-field-grid"><label>Target domain<input value={websiteDomain} disabled /><small>Categories come from this website's stored SERP observations.</small></label><CountrySelect status={market.status} value={countryCode} onChange={setCountryCode} /></div>
         <div className="import-panel-actions"><button className="button solid small" disabled={!market.actionStatus('market_categories')?.available || market.loadingHistory || market.running || !/^[A-Z]{2}$/.test(countryCode)}>Map market categories</button><span>{marketRows.length} categories in the latest run</span></div>
       </form>
       {marketRows.length > 0 && <div className="intelligence-evidence-list" aria-label="Market category evidence">{marketRows.slice(0, 12).map(item => <div className="intelligence-evidence-row" key={item.id}><strong>{item.categoryLabel}</strong><small>{item.observedKeywordCount} keyword{item.observedKeywordCount === 1 ? '' : 's'} · {percent(item.share)} of observed keywords{item.estimatedTraffic === null ? '' : ` · about ${item.estimatedTraffic.toLocaleString()} modeled clicks/month`}</small></div>)}</div>}
@@ -547,7 +576,7 @@ export function MarketAndAppIntelligencePanel({ websiteId, websiteDomain }: { we
           <label>App ID<input value={appId} onChange={event => setAppId(event.target.value)} maxLength={250} placeholder={marketplace === 'google_play' ? 'com.example.app' : '123456789'} /></label>
           {appMode === 'app_rankings' && <label>Search terms<textarea value={appKeywords} onChange={event => setAppKeywords(event.target.value)} rows={2} placeholder="habit tracker&#10;daily planner" /><small>Separate terms with commas or new lines.</small></label>}
         </div>
-        <div className="intelligence-field-grid"><label>Country code<input value={countryCode} onChange={event => setCountryCode(event.target.value.toUpperCase())} maxLength={2} /></label><label>Language code<input value={languageCode} onChange={event => setLanguageCode(event.target.value)} maxLength={5} /><small>Store results follow the country; the language is recorded for reference.</small></label></div>
+        <div className="intelligence-field-grid"><CountrySelect status={apps.status} value={countryCode} onChange={setCountryCode} /><LanguageSelect status={apps.status} value={languageCode} onChange={setLanguageCode} /></div>
         <div className="import-panel-actions"><button className="button solid small" disabled={!appStatus?.available || apps.loadingHistory || apps.running || !appId.trim() || !/^[A-Z]{2}$/.test(countryCode) || (appMode === 'app_rankings' && appKeywordCount === 0)}>Run app research</button><span>{apps.evidence.filter(item => item.kind === 'app').length} saved app records</span></div>
       </form>
       {appRows.length > 0 && <div className="intelligence-evidence-list" aria-label="App intelligence evidence">{appRows.slice(0, 12).map(item => <div className="intelligence-evidence-row" key={item.id}><strong>{item.keyword ? `"${item.keyword}"` : item.title || item.appId}</strong><small>{[item.keyword && item.title ? item.title : null, item.position === null ? null : `position ${item.position}`, item.sharedKeywords === null ? null : `${item.sharedKeywords} shared term${item.sharedKeywords === 1 ? '' : 's'}`].filter(Boolean).join(' · ') || item.appId}</small></div>)}</div>}
@@ -582,7 +611,7 @@ export function SerpIntelligencePanel({ websiteId, websiteDomain, onResults }: {
         <label>Query<input value={query} onChange={event => setQuery(event.target.value)} maxLength={200} placeholder={`Search ${websiteDomain}'s market`} /></label>
         <label>Device<select value={device} onChange={event => setDevice(event.target.value as 'desktop' | 'mobile')}><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label>
       </div>
-      <CountryFields countryCode={countryCode} languageCode={languageCode} onCountry={setCountryCode} onLanguage={setLanguageCode} />
+      <MarketFields status={client.status} countryCode={countryCode} languageCode={languageCode} onCountry={setCountryCode} onLanguage={setLanguageCode} />
       <div className="import-panel-actions"><button className="button solid small" disabled={!status?.available || client.loadingHistory || client.running || !query.trim() || !/^[A-Z]{2}$/.test(countryCode) || !languageCode.trim()}>Capture SERP snapshot</button><span>Up to 20 result positions · {mapped.length} saved records</span></div>
     </form>
     {client.currentRun && <SerpPreview evidence={client.currentRun.evidence} />}
@@ -596,6 +625,12 @@ function SerpPreview({ evidence }: { evidence: IntelligenceEvidence[] }) {
 }
 
 type AnswerMode = 'answer_response' | 'answer_snapshot' | 'answer_demand';
+const ENGINE_MODELS: Record<AnswerEngine, string[]> = {
+  claude: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'],
+  chatgpt: ['gpt-4.1-mini', 'gpt-4.1'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+  perplexity: ['sonar', 'sonar-pro'],
+};
 const DEFAULT_MODELS: Record<AnswerEngine, string> = { chatgpt: 'gpt-4.1-mini', gemini: 'gemini-2.5-flash', claude: 'claude-sonnet-5-5', perplexity: 'sonar' };
 
 export function AnswerEnginePanel({ websiteId, websiteDomain }: { websiteId: string; websiteDomain: string }) {
@@ -641,7 +676,7 @@ export function AnswerEnginePanel({ websiteId, websiteDomain }: { websiteId: str
     {configuredEngines.length === 0 && <p className="intelligence-service-note" role="status">No answer engine has an API key configured on this deployment. Saved observations remain available.</p>}
     {visibilitySamples.length > 0 && <div className="intelligence-visibility-band" aria-label="Saved AI visibility summary"><div><span>Saved samples</span><strong>{visibilitySamples.length}</strong></div><div><span>Named in answers</span><strong>{mentionRate === null ? 'Unavailable' : `${mentionRate}%`}</strong></div><div><span>Average share of named domains</span><strong>{averageVoice === null ? 'Unavailable' : `${averageVoice}%`}</strong></div><div><span>Heuristic sentiment</span><strong>{sentimentSamples.at(-1) || 'Unavailable'}</strong></div></div>}
     <form className="intelligence-run-form" onSubmit={submit}>
-      {mode !== 'answer_demand' && <div className="intelligence-field-grid"><label>Answer engine<select value={engine} onChange={event => { const next = event.target.value as AnswerEngine; setEngine(next); setModel(DEFAULT_MODELS[next]); }} disabled={!activeEngines.length}>{activeEngines.map(item => <option value={item} key={item}>{({ chatgpt: 'ChatGPT', gemini: 'Gemini', claude: 'Claude', perplexity: 'Perplexity' } as const)[item]}</option>)}</select>{!activeEngines.length && <small>No configured engine for this workflow.</small>}</label>{mode === 'answer_response' && <label>Model<input value={model} onChange={event => setModel(event.target.value)} maxLength={80} /><small>The model name the selected engine's API accepts.</small></label>}</div>}
+      {mode !== 'answer_demand' && <div className="intelligence-field-grid"><label>Answer engine<select value={engine} onChange={event => { const next = event.target.value as AnswerEngine; setEngine(next); setModel(DEFAULT_MODELS[next]); }} disabled={!activeEngines.length}>{activeEngines.map(item => <option value={item} key={item}>{({ chatgpt: 'ChatGPT', gemini: 'Gemini', claude: 'Claude', perplexity: 'Perplexity' } as const)[item]}</option>)}</select>{!activeEngines.length && <small>No configured engine for this workflow.</small>}</label>{mode === 'answer_response' && <label>Model<select value={model} onChange={event => setModel(event.target.value)}>{ENGINE_MODELS[engine].map(item => <option value={item} key={item}>{item}</option>)}</select><small>Models offered for the selected engine.</small></label>}</div>}
       {mode === 'answer_demand'
         ? <label>Keywords<textarea value={demandKeywords} onChange={event => setDemandKeywords(event.target.value)} rows={3} placeholder="best crm for startups" /><small>{demandStatus?.reason}</small></label>
         : <label>Prompt<textarea value={prompt} onChange={event => setPrompt(event.target.value)} rows={4} maxLength={2000} /></label>}
@@ -704,7 +739,7 @@ export function PageIntelligencePanel({ websiteId, websiteDomain, websiteUrl }: 
     <div className="intelligence-tabs intelligence-mode-tabs" role="group" aria-label="Page intelligence workflows">{([['page_inspection', 'Inspect page'], ['content_extraction', 'Extract content'], ['page_screenshot', 'Screenshot'], ['site_crawl', 'Site crawl']] as const).map(([key, label]) => <button type="button" aria-pressed={mode === key} className={mode === key ? 'active' : ''} onClick={() => { setMode(key); client.clearCurrent(); }} key={key}>{label}</button>)}</div>
     <form className="intelligence-run-form" onSubmit={submit}>
       {mode === 'site_crawl'
-        ? <div className="intelligence-field-grid"><label>Target domain<input value={websiteDomain} disabled /></label><label>Maximum pages<input type="number" min="1" max={crawlLimit} value={maximumPages} onChange={event => setMaximumPages(Number(event.target.value))} /><small>This deployment caps a site crawl at {crawlLimit.toLocaleString()} pages.</small></label><label className="intelligence-check"><input type="checkbox" checked={extractContent} onChange={event => setExtractContent(event.target.checked)} /> Save page content as markdown</label></div>
+        ? <div className="intelligence-field-grid"><label>Target domain<input value={websiteDomain} disabled /></label><label>Maximum pages<select value={maximumPages} onChange={event => setMaximumPages(Number(event.target.value))}>{pageLimitChoices(crawlLimit).map(item => <option value={item} key={item}>{item.toLocaleString()} pages</option>)}</select><small>This deployment caps a site crawl at {crawlLimit.toLocaleString()} pages.</small></label><label className="intelligence-check"><input type="checkbox" checked={extractContent} onChange={event => setExtractContent(event.target.checked)} /> Save page content as markdown</label></div>
         : <label>Page URL<input type="url" required value={url} onChange={event => setUrl(event.target.value)} /></label>}
       {(mode === 'page_inspection' || mode === 'page_screenshot') && <label>Browser profile<select value={profile} onChange={event => setProfile(event.target.value as typeof profile)}><option value="desktop">Desktop</option><option value="mobile">Mobile</option><option value="tablet">Tablet</option></select></label>}
       {(mode === 'page_inspection' || mode === 'content_extraction') && <label className="intelligence-check"><input type="checkbox" checked={renderJavascript} onChange={event => setRenderJavascript(event.target.checked)} /> Render JavaScript in the browser runner</label>}

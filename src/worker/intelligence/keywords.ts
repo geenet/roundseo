@@ -19,6 +19,10 @@ const LANGUAGE_CRITERIA: Record<string, number> = {
   en: 1000, de: 1001, fr: 1002, es: 1003, it: 1004, ja: 1005, nl: 1010, pt: 1014, pl: 1030,
 };
 
+/** Markets the keyword-metrics source serves. Status and UI dropdowns are built from these, so offered markets always work. */
+export const KEYWORD_MARKET_COUNTRIES = Object.keys(GEO_TARGETS);
+export const KEYWORD_MARKET_LANGUAGES = Object.keys(LANGUAGE_CRITERIA);
+
 export interface KeywordMetricRecord {
   keyword: string;
   searchVolume: number | null;

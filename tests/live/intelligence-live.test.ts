@@ -54,7 +54,7 @@ describe.skipIf(!live)('live browser runner capture', () => {
   }, 120_000);
 
   it('captures a real PNG screenshot through the browser runner', async () => {
-    const shot = await screenshotPage({ url: 'https://example.com/', device: 'mobile', fullPage: true });
+    const shot = await screenshotPage({ url: 'https://example.com/', device: 'mobile', fullPage: true, thumbnail: false });
     const bytes = Buffer.from(shot.base64, 'base64');
     expect(shot.contentType).toBe('image/png');
     expect(bytes.subarray(1, 4).toString()).toBe('PNG');

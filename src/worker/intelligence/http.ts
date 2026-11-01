@@ -131,3 +131,60 @@ function pickHeaders(headers: Headers): Record<string, string> {
   }
   return output;
 }
+
+export interface FetchedBytes {
+  url: string;
+  status: number;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * Fetch a public binary resource (such as an icon) with every redirect hop checked.
+ * Responses larger than maxBytes are refused rather than truncated.
+ */
+export async function fetchPublicBytes(
+  value: string,
+  options: { fetcher?: IntelligenceFetch; timeoutMs?: number; maxBytes: number },
+): Promise<FetchedBytes> {
+  const fetcher = options.fetcher ?? fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let current = value;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    if (!isPublicCrawlUrl(current)) {
+      throw new IntelligenceError('Only public HTTP or HTTPS addresses can be fetched.', { status: 400, code: 'PUBLIC_URL_REQUIRED' });
+    }
+    const response = await fetchWithTimeout(fetcher, current, { method: 'GET', redirect: 'manual', headers: { ...BROWSER_LIKE_HEADERS, Accept: 'image/*,*/*;q=0.5' } }, timeoutMs);
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      await response.body?.cancel().catch(() => undefined);
+      if (!location) break;
+      current = new URL(location, current).href;
+      continue;
+    }
+    return { url: current, status: response.status, contentType: response.headers.get('content-type') || '', bytes: await readBoundedBytes(response, options.maxBytes) };
+  }
+  throw new IntelligenceError('The resource redirected too many times to fetch safely.', { status: 502, code: 'INTELLIGENCE_REDIRECT_LIMIT' });
+}
+
+async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new IntelligenceError('The resource is larger than RoundSEO stores.', { status: 413, code: 'RESOURCE_TOO_LARGE' });
+    }
+    chunks.push(value);
+  }
+  const combined = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.byteLength; }
+  return combined;
+}
