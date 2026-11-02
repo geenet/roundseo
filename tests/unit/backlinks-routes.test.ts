@@ -17,6 +17,7 @@ beforeEach(() => {
   // A second, unrelated organization and website — the tenant-isolation negative case.
   database.prepare(`INSERT INTO users (id, email, name, auth_method, created_at, updated_at) VALUES ('user-rival', 'rival@example.test', 'Rival', 'email_password', ?, ?)`).run('2026-11-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z');
   database.prepare(`INSERT INTO organizations (id, name, slug, owner_id, billing_email, created_at, updated_at) VALUES ('org-2', 'Rival Co', 'rival-co', 'user-rival', 'billing@rival.test', ?, ?)`).run('2026-11-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z');
+  database.prepare(`INSERT INTO websites (id, organization_id, name, domain, url, created_at, updated_at) VALUES ('site-rival', 'org-2', 'Rival Site', 'rival.test', 'https://rival.test/', ?, ?)`).run('2026-11-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z');
 });
 
 afterEach(() => database.close());
@@ -102,5 +103,35 @@ describe('backlink list sharing (AC24)', () => {
     await routeRequest(request(`/api/v2/backlink-shares/${share.id}/revoke`, { method: 'POST', headers: { Authorization: owner } }), db, envFor(db));
     const afterRevoke = await routeRequest(request(`/api/v2/backlink-shares/${share.sharedToken}`), db, envFor(db));
     expect(afterRevoke?.status).toBe(404);
+  });
+
+  it('cross-tenant: a monitorId from another organization cannot be enrolled into a list, even via a bulk request the caller otherwise owns (regression)', async () => {
+    const owner = await authorization('user-owner', 'owner@example.test');
+    const rival = await authorization('user-rival', 'rival@example.test');
+
+    const rivalCreate = await routeRequest(
+      request('/api/v2/websites/site-rival/backlinks', { method: 'POST', headers: { Authorization: rival }, body: JSON.stringify({ sourceUrl: 'https://news.example/rival', expectedTargetUrl: 'https://rival.test/private' }) }),
+      db, envFor(db),
+    );
+    const { monitor: rivalMonitor } = await rivalCreate!.json() as any;
+
+    const ownerCreate = await routeRequest(
+      request('/api/v2/websites/site-1/backlinks', { method: 'POST', headers: { Authorization: owner }, body: JSON.stringify({ sourceUrl: 'https://news.example/mine', expectedTargetUrl: 'https://example.com/pricing' }) }),
+      db, envFor(db),
+    );
+    const { monitor: ownMonitor } = await ownerCreate!.json() as any;
+    const listResponse = await routeRequest(request('/api/v2/websites/site-1/backlink-lists', { method: 'POST', headers: { Authorization: owner }, body: JSON.stringify({ name: 'My list' }) }), db, envFor(db));
+    const { list } = await listResponse!.json() as any;
+
+    const enrollResponse = await routeRequest(
+      request(`/api/v2/backlink-lists/${list.id}/members`, { method: 'POST', headers: { Authorization: owner }, body: JSON.stringify({ monitorIds: [ownMonitor.id, rivalMonitor.id] }) }),
+      db, envFor(db),
+    );
+    const { added } = await enrollResponse!.json() as any;
+    expect(added).toBe(1); // only the owner's own monitor was added
+
+    const members = database.prepare('SELECT monitor_id FROM backlink_list_members WHERE list_id = ?').all(list.id) as any[];
+    expect(members.map(m => m.monitor_id)).toEqual([ownMonitor.id]);
+    expect(members.map(m => m.monitor_id)).not.toContain(rivalMonitor.id);
   });
 });

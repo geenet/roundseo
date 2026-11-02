@@ -19,15 +19,25 @@ export async function exchangeCodeForTokens(code: string, app: GoogleOAuthApp): 
   return { accessToken: body.access_token, refreshToken: body.refresh_token || null, expiresIn: body.expires_in || 3600, scope: body.scope || '' };
 }
 
-export async function refreshAccessToken(refreshToken: string, app: GoogleOAuthApp): Promise<{ accessToken: string; expiresIn: number } | null> {
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ refresh_token: refreshToken, client_id: app.clientId, client_secret: app.clientSecret, grant_type: 'refresh_token' }).toString(),
-  });
-  if (!response.ok) return null;
-  const body = await response.json() as { access_token?: string; expires_in?: number };
-  if (!body.access_token) return null;
-  return { accessToken: body.access_token, expiresIn: body.expires_in || 3600 };
+export type RefreshResult = { kind: 'ok'; accessToken: string; expiresIn: number } | { kind: 'rejected' } | { kind: 'transient' };
+
+/** Distinguishes Google explicitly rejecting the refresh token (permanent — needs reconnect) from a
+ * network/transient failure reaching Google at all (temporary — the stored token is still fine). */
+export async function refreshAccessToken(refreshToken: string, app: GoogleOAuthApp): Promise<RefreshResult> {
+  let response: Response;
+  try {
+    response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ refresh_token: refreshToken, client_id: app.clientId, client_secret: app.clientSecret, grant_type: 'refresh_token' }).toString(),
+    });
+  } catch {
+    return { kind: 'transient' };
+  }
+  if (response.status >= 500 || response.status === 429) return { kind: 'transient' };
+  if (!response.ok) return { kind: 'rejected' };
+  const body = await response.json().catch(() => null) as { access_token?: string; expires_in?: number } | null;
+  if (!body?.access_token) return { kind: 'rejected' };
+  return { kind: 'ok', accessToken: body.access_token, expiresIn: body.expires_in || 3600 };
 }
 
 export async function fetchGoogleAccountEmail(accessToken: string): Promise<string | null> {
@@ -80,8 +90,10 @@ export async function inspectUrl(accessToken: string, siteUrl: string, inspectio
     lastCrawlTime: indexResult.lastCrawlTime || null,
     robotsTxtState: indexResult.robotsTxtState || null,
     indexingState: indexResult.indexingState || null,
-    declaredCanonical: indexResult.googleCanonical || null,
-    selectedCanonical: indexResult.userCanonical || indexResult.googleCanonical || null,
+    // Google's own field names are the reverse of what they mean here: userCanonical is the page's
+    // own declared canonical, googleCanonical is the one Google selected to index.
+    declaredCanonical: indexResult.userCanonical || null,
+    selectedCanonical: indexResult.googleCanonical || indexResult.userCanonical || null,
     sitemaps: Array.isArray(indexResult.sitemap) ? indexResult.sitemap : [],
     inspectionResultLink: result.inspectionResultLink || null,
   };

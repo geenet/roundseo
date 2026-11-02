@@ -202,10 +202,13 @@ export async function commitBacklinkImport(db: Database, importId: string, organ
       if (!importAnchorJobId) importAnchorJobId = await ensureImportAnchorJob(db, websiteId, importId, userId);
       const candidateId = newId('candidate');
       const now = new Date().toISOString();
+      // Plain INSERT OR IGNORE (not a targeted ON CONFLICT) so it's deduped by whichever unique index
+      // applies: the website_id+provider+source_url+target_url index for a known target, or the
+      // partial website_id+provider+source_url index for target_url IS NULL (migration 014) — SQLite
+      // treats every NULL as distinct, so the non-partial index alone never caught a source-only repeat.
       await db.prepare(`
-        INSERT INTO backlink_candidates (id, website_id, discovery_job_id, source_url, target_url, provider, provider_record_id, imported_at, enrollment_status)
+        INSERT OR IGNORE INTO backlink_candidates (id, website_id, discovery_job_id, source_url, target_url, provider, provider_record_id, imported_at, enrollment_status)
         VALUES (?, ?, ?, ?, NULL, 'import', NULL, ?, 'pending')
-        ON CONFLICT(website_id, provider, source_url, target_url) DO NOTHING
       `).bind(candidateId, websiteId, importAnchorJobId, String(row.source_url), now).run();
       await db.prepare(`UPDATE backlink_import_rows SET candidate_id = ? WHERE id = ?`).bind(candidateId, rowId).run();
     }

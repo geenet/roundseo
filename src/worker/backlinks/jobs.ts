@@ -74,19 +74,27 @@ export async function dispatchBacklinkJob(env: BacklinkJobEnvironment, ctx: JobC
 /** One lease-protected job execution. Safe to call twice for the same job (idempotent via the job's own status guard). */
 export async function processBacklinkJob(env: BacklinkJobEnvironment, message: BacklinkJobMessage): Promise<void> {
   const db = env.DB;
-  const claimed = await db.prepare(`
-    UPDATE backlink_jobs SET status = 'running', started_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?
-    WHERE id = ? AND status IN ('queued', 'retrying')
-  `).bind(new Date().toISOString(), leaseUntil(new Date().toISOString()), message.jobId).run();
-  if (!claimed?.meta?.changes) return; // Already running, completed, or redelivered after completion — never re-run (AC13).
   try {
-    await runBacklinkCheck(db, env, message.monitorId, message.jobId);
-    await db.prepare(`UPDATE backlink_jobs SET status = 'complete', completed_at = ? WHERE id = ?`).bind(new Date().toISOString(), message.jobId).run();
-  } catch (error) {
-    const job = await db.prepare('SELECT attempt_count, max_attempts FROM backlink_jobs WHERE id = ?').bind(message.jobId).first();
-    const retrying = job && Number(job.attempt_count) < Number(job.max_attempts ?? MAX_ATTEMPTS);
-    await db.prepare(`UPDATE backlink_jobs SET status = ?, error_message = ? WHERE id = ?`)
-      .bind(retrying ? 'retrying' : 'failed', error instanceof Error ? error.message : 'Backlink check failed.', message.jobId).run();
+    const claimed = await db.prepare(`
+      UPDATE backlink_jobs SET status = 'running', started_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?
+      WHERE id = ? AND status IN ('queued', 'retrying')
+    `).bind(new Date().toISOString(), leaseUntil(new Date().toISOString()), message.jobId).run();
+    if (!claimed?.meta?.changes) return; // Already running, completed, or redelivered after completion — never re-run (AC13).
+    try {
+      await runBacklinkCheck(db, env, message.monitorId, message.jobId);
+      await db.prepare(`UPDATE backlink_jobs SET status = 'complete', completed_at = ? WHERE id = ?`).bind(new Date().toISOString(), message.jobId).run();
+    } catch (error) {
+      const job = await db.prepare('SELECT attempt_count, max_attempts FROM backlink_jobs WHERE id = ?').bind(message.jobId).first();
+      const retrying = job && Number(job.attempt_count) < Number(job.max_attempts ?? MAX_ATTEMPTS);
+      const now = new Date().toISOString();
+      // On a retry, pull the lease back to now rather than leaving it ~JOB_LEASE_MINUTES in the
+      // future (set at claim time above) — otherwise the scheduled recovery sweep, the only thing
+      // that redispatches a 'retrying' job, won't see it as due until that lease naturally lapses.
+      await db.prepare(`UPDATE backlink_jobs SET status = ?, error_message = ?, lease_expires_at = ? WHERE id = ?`)
+        .bind(retrying ? 'retrying' : 'failed', error instanceof Error ? error.message : 'Backlink check failed.', retrying ? now : null, message.jobId).run();
+    }
+  } catch (claimError) {
+    console.error('Backlink job claim failed:', claimError);
   }
 }
 

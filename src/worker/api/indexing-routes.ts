@@ -38,7 +38,7 @@ export async function handleIndexingRoutes(pathname: string, request: Request, d
       if (!app) return json({ error: 'Google OAuth is not configured on this deployment.' }, 503);
       const url = new URL(request.url);
       const wantsWrite = url.searchParams.get('scope') === 'write';
-      return startOAuth(app, startMatch[1], auth.userId, wantsWrite);
+      return startOAuth(db, request, app, startMatch[1], auth.userId, wantsWrite);
     }
 
     const connectionMatch = pathname.match(/^\/api\/v2\/websites\/([^/]+)\/google-connection$/);
@@ -91,6 +91,13 @@ export async function handleIndexingRoutes(pathname: string, request: Request, d
       if (!(await canAccessWebsite(db, auth.userId, inspectionMatch[1]))) return notFound();
       const body = await request.json().catch(() => null) as { url?: string; inventoryId?: string; reason?: 'priority' | 'manual' } | null;
       if (!body?.url && !body?.inventoryId) return badRequest('Provide a URL or an inventory ID to inspect.');
+      // A client-supplied inventoryId must belong to THIS website, not just one the caller can access —
+      // otherwise a user with access to website A could inspect website B's page using A's Google
+      // connection and quota, and the resulting observation would leak into B's own inventory listing.
+      if (body.inventoryId) {
+        const item = await getInventoryItem(db, body.inventoryId);
+        if (!item || item.websiteId !== inspectionMatch[1]) return badRequest('This inventory item does not belong to this website.');
+      }
       const inventoryId = body.inventoryId || await upsertInventoryUrl(db, inspectionMatch[1], body.url!, 'manual', { isPriority: true });
       const jobId = await queueInspection(db, inspectionMatch[1], inventoryId, body.reason || 'manual', auth.userId);
       const run = runInspectionJob(db, env, jobId);
@@ -136,16 +143,29 @@ export async function handleIndexingRoutes(pathname: string, request: Request, d
   }
 }
 
-function startOAuth(app: GoogleOAuthApp, websiteId: string, userId: string, wantsWrite: boolean): Response {
+const OAUTH_STATE_TTL_MINUTES = 10;
+
+/**
+ * `state` carries nothing but an opaque nonce, matching the existing login OAuth flow
+ * (src/worker/auth/index.ts) — the actual websiteId/userId/scope for this request are recorded
+ * server-side (google_oauth_states, migration 014) and looked up at callback, never trusted from
+ * the round-tripped query string. A plain client-supplied state could otherwise rebind a
+ * connection to an attacker-chosen userId while reusing a legitimately-issued, still-valid nonce.
+ */
+async function startOAuth(db: any, request: Request, app: GoogleOAuthApp, websiteId: string, userId: string, wantsWrite: boolean): Promise<Response> {
   const nonce = crypto.randomUUID();
   const scopes = wantsWrite ? requiredWriteScopes() : requiredReadScopes();
-  const state = `${encodeURIComponent(websiteId)}.${encodeURIComponent(userId)}.${wantsWrite ? 'write' : 'read'}.${nonce}`;
-  const consentUrl = buildConsentUrl(app, state, scopes);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + OAUTH_STATE_TTL_MINUTES * 60_000).toISOString();
+  await db.prepare(`INSERT INTO google_oauth_states (nonce, website_id, user_id, scope, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(nonce, websiteId, userId, wantsWrite ? 'write' : 'read', now.toISOString(), expiresAt).run();
+  const consentUrl = buildConsentUrl(app, nonce, scopes);
+  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
   return new Response(JSON.stringify({ url: consentUrl }), {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
-      'Set-Cookie': `${STATE_COOKIE}=${nonce}; HttpOnly; SameSite=Lax; Path=/api/v2/websites; Max-Age=600`,
+      'Set-Cookie': `${STATE_COOKIE}=${nonce}; HttpOnly; SameSite=Lax; Path=/api/v2/websites; Max-Age=600${secure}`,
     },
   });
 }
@@ -153,13 +173,17 @@ function startOAuth(app: GoogleOAuthApp, websiteId: string, userId: string, want
 async function handleOAuthCallback(request: Request, db: any, env: Env, websiteId: string): Promise<Response> {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
-  const state = url.searchParams.get('state') || '';
-  const [stateWebsiteId, userId, , nonce] = state.split('.').map(part => decodeURIComponent(part || ''));
+  const nonce = url.searchParams.get('state') || '';
   const stateCookie = request.headers.get('Cookie')?.split(';').map(v => v.trim()).find(v => v.startsWith(`${STATE_COOKIE}=`))?.slice(STATE_COOKIE.length + 1);
   const clearCookie = `${STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/api/v2/websites; Max-Age=0`;
-  if (!code || !nonce || !stateCookie || stateCookie !== nonce || stateWebsiteId !== websiteId) {
+  const pending = nonce ? await db.prepare('SELECT * FROM google_oauth_states WHERE nonce = ?').bind(nonce).first() : null;
+  // One-time use regardless of outcome, so a reused or replayed callback can never succeed twice.
+  if (pending) await db.prepare('DELETE FROM google_oauth_states WHERE nonce = ?').bind(nonce).run();
+  const expired = pending && Date.parse(String(pending.expires_at)) <= Date.now();
+  if (!code || !nonce || !stateCookie || stateCookie !== nonce || !pending || expired || String(pending.website_id) !== websiteId) {
     return new Response(JSON.stringify({ error: 'The connection request could not be verified. Try connecting again.' }), { status: 400, headers: { 'Content-Type': 'application/json', 'Set-Cookie': clearCookie } });
   }
+  const userId = String(pending.user_id);
   const website = await getWebsite(db, websiteId);
   if (!website) return new Response(JSON.stringify({ error: 'Website not found' }), { status: 404, headers: { 'Set-Cookie': clearCookie } });
   try {

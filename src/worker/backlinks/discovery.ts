@@ -13,6 +13,10 @@
 import type { AdapterAvailability } from '../../shared/indexing';
 import type { DiscoveryJobResult } from '../../shared/backlinks';
 import { newId } from './capacity';
+import { normalizeUrlForIdentity } from './url-identity';
+
+const PAGE_SIZE = 500;
+const MAX_PAGES = 40; // bounds a single job to at most MAX_PAGES * PAGE_SIZE retrieved rows
 
 type Database = any;
 
@@ -45,6 +49,14 @@ export function resolveDiscoveryProvider(_env: unknown): DiscoveryProvider {
   return new UnavailableDiscoveryProvider();
 }
 
+/**
+ * Runs to completion synchronously (the budgets above keep one call bounded): reserves the
+ * idempotency key first, then — only when a real provider is configured — pages through
+ * `fetchPage`, merging each record into `backlink_candidates` with conservative URL
+ * normalization and counting retrieved/unique/duplicate rows (AC14). With no provider
+ * configured (the default), it records `unavailable` with the provider's reason and touches
+ * no candidate rows, exactly as before.
+ */
 export async function startDiscoveryJob(db: Database, env: unknown, websiteId: string, domain: string, budgetRequested: number, idempotencyKey: string, requestedBy: string): Promise<DiscoveryJobResult> {
   const existing = await db.prepare('SELECT * FROM discovery_jobs WHERE website_id = ? AND idempotency_key = ?').bind(websiteId, idempotencyKey).first();
   if (existing) return mapDiscoveryJobRow(existing);
@@ -52,13 +64,45 @@ export async function startDiscoveryJob(db: Database, env: unknown, websiteId: s
   const provider = resolveDiscoveryProvider(env);
   const availability = provider.availability();
   const id = newId('discovery');
-  const now = new Date().toISOString();
+  const startedAt = new Date().toISOString();
   await db.prepare(`
-    INSERT INTO discovery_jobs (id, website_id, provider, status, budget_requested, retrieved_count, unique_count, duplicate_count, idempotency_key, error_message, requested_by, created_at, completed_at)
-    VALUES (?, ?, ?, 'unavailable', ?, 0, 0, 0, ?, ?, ?, ?, ?)
-  `).bind(id, websiteId, provider.name, budgetRequested, idempotencyKey, availability.reason, requestedBy, now, now).run();
-  void domain;
+    INSERT INTO discovery_jobs (id, website_id, provider, status, budget_requested, retrieved_count, unique_count, duplicate_count, idempotency_key, error_message, requested_by, created_at)
+    VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)
+  `).bind(id, websiteId, provider.name, availability.available ? 'running' : 'unavailable', budgetRequested, idempotencyKey, availability.reason, requestedBy, startedAt).run();
+
+  if (!availability.available) return (await getDiscoveryJob(db, id))!;
+
+  let retrieved = 0; let unique = 0; let duplicate = 0; let cursor: string | null = null; let failure: string | null = null;
+  try {
+    for (let page = 0; page < MAX_PAGES && retrieved < budgetRequested; page += 1) {
+      const { records, nextCursor } = await provider.fetchPage(domain, cursor, Math.min(PAGE_SIZE, budgetRequested - retrieved));
+      for (const record of records) {
+        retrieved += 1;
+        const sourceIdentity = safeIdentity(record.sourceUrl);
+        if (!sourceIdentity) { duplicate += 1; continue; } // an unparseable source can never be enrolled; counted, not stored
+        const targetNormalized = record.targetUrl ? safeIdentity(record.targetUrl)?.normalized ?? null : null;
+        const insert = await db.prepare(`
+          INSERT INTO backlink_candidates (id, website_id, discovery_job_id, source_url, target_url, provider, provider_record_id, provider_last_seen_at, imported_at, enrollment_status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+          ON CONFLICT DO NOTHING
+        `).bind(newId('candidate'), websiteId, id, sourceIdentity.normalized, targetNormalized, provider.name, record.providerRecordId, record.lastSeenAt, new Date().toISOString()).run();
+        if (insert?.meta?.changes) unique += 1; else duplicate += 1;
+      }
+      cursor = nextCursor;
+      if (!cursor) break;
+    }
+  } catch (error) {
+    failure = error instanceof Error ? error.message : 'The discovery provider request failed.';
+  }
+
+  await db.prepare(`
+    UPDATE discovery_jobs SET status = ?, retrieved_count = ?, unique_count = ?, duplicate_count = ?, cursor = ?, error_message = ?, completed_at = ? WHERE id = ?
+  `).bind(failure ? 'failed' : 'complete', retrieved, unique, duplicate, cursor, failure, new Date().toISOString(), id).run();
   return (await getDiscoveryJob(db, id))!;
+}
+
+function safeIdentity(url: string): ReturnType<typeof normalizeUrlForIdentity> | null {
+  try { return normalizeUrlForIdentity(url); } catch { return null; }
 }
 
 export async function getDiscoveryJob(db: Database, id: string): Promise<DiscoveryJobResult | null> {

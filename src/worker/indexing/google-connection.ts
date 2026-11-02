@@ -7,7 +7,7 @@
 import { nanoid } from 'nanoid';
 import { GSC_READONLY_SCOPE, GSC_WRITE_SCOPE, type GoogleConnection, type PropertyType } from '../../shared/indexing';
 import { decryptToken, encryptToken, tokenEncryptionSecret } from './token-crypto';
-import { exchangeCodeForTokens, fetchGoogleAccountEmail, refreshAccessToken, type GoogleOAuthApp } from './search-console-client';
+import { exchangeCodeForTokens, fetchGoogleAccountEmail, refreshAccessToken, type GoogleOAuthApp, type RefreshResult } from './search-console-client';
 
 type Database = any;
 
@@ -48,10 +48,16 @@ export async function completeGoogleConnection(
 
   if (existing) {
     const refreshToken = tokens.refreshToken ? await encryptToken(secret, tokens.refreshToken) : existing.encrypted_refresh_token;
+    // Merge with the previously granted scopes rather than overwrite — if this exchange's response
+    // ever omits `scope` (not guaranteed across all OAuth responses), a plain overwrite would
+    // silently drop an already-granted write scope even though Google's actual consent is unchanged.
+    let existingScopes: string[] = [];
+    try { existingScopes = JSON.parse(existing.granted_scopes_json || '[]'); } catch { existingScopes = []; }
+    const mergedScopes = [...new Set([...existingScopes, ...grantedScopes])];
     await db.prepare(`
       UPDATE google_connections SET google_account_email = ?, encrypted_refresh_token = ?, access_token = ?, access_token_expires_at = ?,
         granted_scopes_json = ?, status = 'connected', last_error = NULL, updated_at = ? WHERE id = ?
-    `).bind(email, refreshToken, tokens.accessToken, expiresAt, JSON.stringify(grantedScopes), now, existing.id).run();
+    `).bind(email, refreshToken, tokens.accessToken, expiresAt, JSON.stringify(mergedScopes), now, existing.id).run();
     return (await getGoogleConnection(db, websiteId))!;
   }
   if (!tokens.refreshToken) throw new Error('Google did not grant offline access. Try connecting again.');
@@ -84,18 +90,26 @@ export async function getValidAccessToken(db: Database, env: GoogleConnectionEnv
   const app = googleOAuthApp(env);
   const secret = tokenEncryptionSecret(env);
   if (!app || !secret) return null;
+  let refreshed: RefreshResult;
   try {
     const refreshToken = await decryptToken(secret, String(row.encrypted_refresh_token));
-    const refreshed = await refreshAccessToken(refreshToken, app);
-    if (!refreshed) throw new Error('refresh failed');
+    refreshed = await refreshAccessToken(refreshToken, app);
+  } catch {
+    refreshed = { kind: 'transient' };
+  }
+  if (refreshed.kind === 'ok') {
     await db.prepare('UPDATE google_connections SET access_token = ?, access_token_expires_at = ?, status = ?, last_error = NULL, updated_at = ? WHERE id = ?')
       .bind(refreshed.accessToken, new Date(Date.now() + refreshed.expiresIn * 1000).toISOString(), 'connected', new Date().toISOString(), row.id).run();
     return refreshed.accessToken;
-  } catch {
+  }
+  if (refreshed.kind === 'rejected') {
+    // Only a definite rejection from Google means the stored refresh token is actually invalid —
+    // a network/5xx/429 failure (kind: 'transient') leaves status and the token alone and just
+    // fails this one attempt, so a transient outage never forces an unnecessary reconnect.
     await db.prepare(`UPDATE google_connections SET status = 'needs_reauth', last_error = ?, updated_at = ? WHERE id = ?`)
       .bind('Google access could not be refreshed. Reconnect this website.', new Date().toISOString(), row.id).run();
-    return null;
   }
+  return null;
 }
 
 /** True once the webmasters (write) scope has been granted — required before sitemap submission is offered. */

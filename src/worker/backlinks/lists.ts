@@ -31,14 +31,22 @@ export async function listBacklinkLists(db: Database, websiteId: string): Promis
   return (rows.results || []).map(mapListRow);
 }
 
+/**
+ * Adds monitors to a list, silently dropping any id that isn't a monitor on the list's own
+ * website — without this, a caller who can access list L could enroll another organization's
+ * monitor into L, and a later client share of L would then leak that monitor's evidence.
+ */
 export async function addListMembers(db: Database, listId: string, monitorIds: string[]): Promise<number> {
+  const list = await db.prepare('SELECT website_id FROM backlink_lists WHERE id = ?').bind(listId).first();
+  if (!list) return 0;
   let added = 0;
   const now = new Date().toISOString();
   for (const monitorId of monitorIds) {
     const result = await db.prepare(`
-      INSERT INTO backlink_list_members (list_id, monitor_id, added_at) VALUES (?, ?, ?)
+      INSERT INTO backlink_list_members (list_id, monitor_id, added_at)
+      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM backlink_monitors WHERE id = ? AND website_id = ?)
       ON CONFLICT(list_id, monitor_id) DO NOTHING
-    `).bind(listId, monitorId, now).run();
+    `).bind(listId, monitorId, now, monitorId, list.website_id).run();
     if (result?.meta?.changes) added += 1;
   }
   return added;

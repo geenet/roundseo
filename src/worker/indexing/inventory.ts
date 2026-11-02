@@ -6,12 +6,12 @@
  */
 import { nanoid } from 'nanoid';
 import type { IndexingInventoryItem, InventorySource } from '../../shared/indexing';
+import { normalizeUrlForIdentity } from '../backlinks/url-identity';
 
 type Database = any;
 
 function normalize(url: string): string {
-  const parsed = new URL(url);
-  return `${parsed.protocol.toLowerCase()}//${parsed.hostname.toLowerCase()}${parsed.port ? ':' + parsed.port : ''}${parsed.pathname}${parsed.search}`;
+  return normalizeUrlForIdentity(url).normalized;
 }
 
 export async function upsertInventoryUrl(db: Database, websiteId: string, url: string, source: InventorySource, options: { intendedIndexed?: boolean; isPriority?: boolean } = {}): Promise<string> {

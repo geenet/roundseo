@@ -49,12 +49,14 @@ export async function queueInspection(db: Database, websiteId: string, inventory
 
 /** Runs one inspection job: reserves quota, calls the URL Inspection API, and records the observation. */
 export async function runInspectionJob(db: Database, env: GoogleConnectionEnv, jobId: string): Promise<void> {
-  const job = await db.prepare('SELECT * FROM inspection_jobs WHERE id = ?').bind(jobId).first();
-  if (!job || job.status !== 'queued') return;
-  const claimed = await db.prepare(`UPDATE inspection_jobs SET status = 'running', attempt_count = attempt_count + 1 WHERE id = ? AND status = 'queued'`).bind(jobId).run();
-  if (!claimed?.meta?.changes) return;
-  const websiteId = String(job.website_id);
+  let claimed = false;
   try {
+    const job = await db.prepare('SELECT * FROM inspection_jobs WHERE id = ?').bind(jobId).first();
+    if (!job || job.status !== 'queued') return;
+    const claim = await db.prepare(`UPDATE inspection_jobs SET status = 'running', attempt_count = attempt_count + 1 WHERE id = ? AND status = 'queued'`).bind(jobId).run();
+    if (!claim?.meta?.changes) return;
+    claimed = true;
+    const websiteId = String(job.website_id);
     const connection = await getGoogleConnection(db, websiteId);
     if (!connection || !connection.selectedProperty) throw new Error('No Google Search Console property is connected for this website.');
     if (!(await reserveInspectionQuota(db, websiteId))) {
@@ -76,7 +78,9 @@ export async function runInspectionJob(db: Database, env: GoogleConnectionEnv, j
     `).bind(observationId, websiteId, job.inventory_id, result.verdict, result.coverageState, result.lastCrawlTime, result.declaredCanonical, result.selectedCanonical, JSON.stringify(result.sitemaps), result.inspectionResultLink, now, now).run();
     await db.prepare(`UPDATE inspection_jobs SET status = 'complete', completed_at = ?, result_observation_id = ? WHERE id = ?`).bind(now, observationId, jobId).run();
   } catch (error) {
-    await db.prepare(`UPDATE inspection_jobs SET status = 'failed', error_message = ? WHERE id = ?`).bind(error instanceof Error ? error.message : 'Inspection failed.', jobId).run();
+    const message = error instanceof Error ? error.message : 'Inspection failed.';
+    if (claimed) await db.prepare(`UPDATE inspection_jobs SET status = 'failed', error_message = ? WHERE id = ?`).bind(message, jobId).run();
+    else console.error('Inspection job claim failed:', error);
   }
 }
 

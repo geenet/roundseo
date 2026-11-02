@@ -1,6 +1,6 @@
 import type { BacklinkMonitor, MatchMode, MonitorCadence, MonitorStatus, Presence } from '../../shared/backlinks';
 import { normalizeMonitorUrl } from './url-identity';
-import { newId, reconcileBacklinkCapacity, reserveBacklinkCapacitySlot } from './capacity';
+import { newId, reconcileBacklinkCapacity, releaseBacklinkCapacity, reserveBacklinkCapacitySlot } from './capacity';
 
 type Database = any;
 
@@ -37,9 +37,12 @@ export async function createBacklinkMonitor(db: Database, websiteId: string, org
 
   if (existing) {
     if (!(await reserveBacklinkCapacitySlot(db, organizationId))) throw new BacklinkCapacityError();
-    await db.prepare(`
-      UPDATE backlink_monitors SET status = 'active', cadence = ?, next_check_at = ?, updated_at = ? WHERE id = ?
+    // The status flip is guarded by `status != 'active'` so two concurrent reactivations of the
+    // same monitor can't both win; the loser's already-reserved slot is handed back.
+    const flipped = await db.prepare(`
+      UPDATE backlink_monitors SET status = 'active', cadence = ?, next_check_at = ?, updated_at = ? WHERE id = ? AND status != 'active'
     `).bind(input.cadence || existing.cadence, nextCheckAt(input.cadence as MonitorCadence || existing.cadence, now), now, existing.id).run();
+    if (!flipped?.meta?.changes) await releaseBacklinkCapacity(db, organizationId, 1);
     const reactivated = await getBacklinkMonitor(db, String(existing.id));
     if (input.listId && reactivated) await addMonitorToList(db, input.listId, reactivated.id);
     return { monitor: reactivated!, created: false };
@@ -118,6 +121,10 @@ export async function patchBacklinkMonitor(db: Database, id: string, organizatio
   const willBeActive = nextStatus === 'active';
   if (!wasActive && willBeActive) {
     if (!(await reserveBacklinkCapacitySlot(db, organizationId))) throw new BacklinkCapacityError();
+    // Guard the status flip itself against a concurrent activation of the same monitor; if we lost
+    // that race, hand back the slot we just reserved instead of double-charging capacity for one row.
+    const claimed = await db.prepare(`UPDATE backlink_monitors SET status = 'active' WHERE id = ? AND status != 'active'`).bind(id).run();
+    if (!claimed?.meta?.changes) await releaseBacklinkCapacity(db, organizationId, 1);
   }
   await db.prepare(`
     UPDATE backlink_monitors SET
@@ -152,7 +159,29 @@ export async function addMonitorToList(db: Database, listId: string, monitorId: 
  * older than what is already recorded. An old delayed job can never
  * overwrite a newer observation (AC12).
  */
-export async function advanceMonitorState(db: Database, monitorId: string, attemptedAt: string, update: { presence?: Presence; confirmedAt?: string; nextCheckAt?: string; confirmationDueAt?: string | null; pendingConfirmationObservationId?: string | null }): Promise<boolean> {
+export interface MonitorStateUpdate {
+  presence?: Presence; confirmedAt?: string; nextCheckAt?: string;
+  /** Omit these two entirely to leave an in-progress confirmation window untouched (an inconclusive
+   * retry must never clear it); pass `null` explicitly only to resolve/clear it. */
+  confirmationDueAt?: string | null; pendingConfirmationObservationId?: string | null;
+}
+
+export async function advanceMonitorState(db: Database, monitorId: string, attemptedAt: string, update: MonitorStateUpdate): Promise<boolean> {
+  // Built conditionally so an omitted confirmation field is left alone in SQL (not merely bound as
+  // null) — the only way to distinguish "don't touch" from "clear" through a single UPDATE.
+  const touchesConfirmationDueAt = 'confirmationDueAt' in update;
+  const touchesPendingObservation = 'pendingConfirmationObservationId' in update;
+  const params: unknown[] = [
+    attemptedAt,
+    update.confirmedAt || null, attemptedAt,
+    update.presence || null,
+    update.presence || null, update.confirmedAt || null, attemptedAt,
+    update.nextCheckAt || null,
+  ];
+  if (touchesConfirmationDueAt) params.push(update.confirmationDueAt);
+  if (touchesPendingObservation) params.push(update.pendingConfirmationObservationId);
+  params.push(attemptedAt, monitorId, attemptedAt);
+
   const result = await db.prepare(`
     UPDATE backlink_monitors SET
       last_attempt_at = ?,
@@ -160,20 +189,11 @@ export async function advanceMonitorState(db: Database, monitorId: string, attem
       last_confirmed_presence = COALESCE(?, last_confirmed_presence),
       last_confirmed_at = CASE WHEN ? IS NOT NULL AND ? IS NOT NULL THEN ? ELSE last_confirmed_at END,
       next_check_at = COALESCE(?, next_check_at),
-      confirmation_due_at = ?,
-      pending_confirmation_observation_id = ?,
+      ${touchesConfirmationDueAt ? 'confirmation_due_at = ?,' : ''}
+      ${touchesPendingObservation ? 'pending_confirmation_observation_id = ?,' : ''}
       updated_at = ?
     WHERE id = ? AND (last_attempt_at IS NULL OR last_attempt_at <= ?)
-  `).bind(
-    attemptedAt,
-    update.confirmedAt || null, attemptedAt,
-    update.presence || null,
-    update.presence || null, update.confirmedAt || null, attemptedAt,
-    update.nextCheckAt || null,
-    update.confirmationDueAt ?? null,
-    update.pendingConfirmationObservationId ?? null,
-    attemptedAt, monitorId, attemptedAt,
-  ).run();
+  `).bind(...params).run();
   return Boolean(result?.meta?.changes);
 }
 
@@ -181,7 +201,14 @@ export function nextCheckAt(cadence: MonitorCadence, from: string): string {
   const date = new Date(from);
   switch (cadence) {
     case 'daily': date.setUTCDate(date.getUTCDate() + 1); break;
-    case 'monthly': date.setUTCMonth(date.getUTCMonth() + 1); break;
+    case 'monthly': {
+      // setUTCMonth overflows past short months (Jan 31 -> Mar 3); clamp to the target month's last day instead.
+      const targetMonth = date.getUTCMonth() + 1;
+      const lastDayOfTargetMonth = new Date(Date.UTC(date.getUTCFullYear(), targetMonth + 1, 0)).getUTCDate();
+      date.setUTCDate(Math.min(date.getUTCDate(), lastDayOfTargetMonth));
+      date.setUTCMonth(targetMonth);
+      break;
+    }
     case 'manual': date.setUTCFullYear(date.getUTCFullYear() + 100); break;
     default: date.setUTCDate(date.getUTCDate() + 7);
   }

@@ -7,6 +7,8 @@
  * attach occurrences to, so action_occurrences is intentionally left empty.
  */
 import { nanoid } from 'nanoid';
+import { normalizeUrlForIdentity } from './url-identity';
+import { fingerprint } from './parser';
 
 type Database = any;
 
@@ -20,7 +22,7 @@ export interface TargetHealthInput {
 
 export async function recordTargetHealthFinding(db: Database, input: TargetHealthInput): Promise<void> {
   const problem = await classifyTargetProblem(db, input);
-  const actionKey = `backlink_target:${input.websiteId}:${hashKey(input.targetUrl)}`;
+  const actionKey = `backlink_target:${input.websiteId}:${fingerprint(input.targetUrl)}`;
   if (!problem) {
     // The destination recovered or was never a problem; resolve any open action for it.
     await db.prepare(`UPDATE action_items SET status = 'verified_resolved', verified_at = ? WHERE action_key = ? AND status NOT IN ('verified_resolved', 'ignored', 'not_applicable')`)
@@ -30,10 +32,16 @@ export async function recordTargetHealthFinding(db: Database, input: TargetHealt
   const now = new Date().toISOString();
   const existing = await db.prepare('SELECT id, status FROM action_items WHERE action_key = ?').bind(actionKey).first();
   if (existing) {
+    // Also escapes 'awaiting_verification': that status is set only by the generic crawl-based
+    // Verify button (src/worker/services/audit-foundation.ts), which can never resolve a
+    // backlink-sourced action because there is no action_occurrences row for it to match against
+    // (this module's evidence is a backlink check, not a crawl). Backlink evidence re-confirming
+    // the problem is still present is itself a legitimate, independent recheck — "open" again,
+    // not stuck waiting on a crawl that will never close it.
     await db.prepare(`
       UPDATE action_items SET
         title = ?, severity = ?, business_impact = ?, affected_page_count = ?, last_seen_at = ?,
-        status = CASE WHEN status IN ('verified_resolved', 'ignored', 'not_applicable') THEN 'open' ELSE status END
+        status = CASE WHEN status IN ('verified_resolved', 'ignored', 'not_applicable', 'awaiting_verification') THEN 'open' ELSE status END
       WHERE id = ?
     `).bind(problem.title, problem.severity, problem.impact, input.monitorCount, now, existing.id).run();
     return;
@@ -81,14 +89,6 @@ async function classifyTargetProblem(db: Database, input: TargetHealthInput): Pr
 }
 
 function normalizedOrRaw(value: string): string {
-  try {
-    const url = new URL(value);
-    return `${url.protocol.toLowerCase()}//${url.hostname.toLowerCase()}${url.port ? ':' + url.port : ''}${url.pathname}${url.search}`;
-  } catch { return value; }
+  try { return normalizeUrlForIdentity(value).normalized; } catch { return value; }
 }
 
-function hashKey(value: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i += 1) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 16777619); }
-  return (hash >>> 0).toString(16);
-}

@@ -110,7 +110,7 @@ export async function handleBacklinkRoutes(pathname: string, request: Request, d
     if (historyMatch && request.method === 'GET') {
       if (!(await canAccessBacklinkMonitor(db, auth.userId, historyMatch[1]))) return notFound();
       const url = new URL(request.url);
-      const history = await getMonitorHistory(db, historyMatch[1], numberParam(url, 'limit') || 50);
+      const history = await getMonitorHistory(db, historyMatch[1], numberParam(url, 'limit') ?? 50);
       return json(history);
     }
 

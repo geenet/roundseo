@@ -89,7 +89,9 @@ function stripTags(value: string): string {
 }
 
 function attributeValue(attributes: string, name: string): string | null {
-  const re = new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'i');
+  // Must be preceded by whitespace (or start the string), never by a hyphen — otherwise
+  // "href" wrongly matches inside "data-href", silently returning the wrong link's target.
+  const re = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(["'])(.*?)\\1`, 'i');
   const match = re.exec(attributes);
   return match ? decodeEntities(match[2]) : null;
 }
@@ -104,7 +106,7 @@ function decodeEntities(value: string): string {
 }
 
 /** A stable, non-cryptographic fingerprint; used only to re-identify an occurrence's position, never as a security token. */
-function fingerprint(value: string): string {
+export function fingerprint(value: string): string {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i += 1) {
     hash ^= value.charCodeAt(i);

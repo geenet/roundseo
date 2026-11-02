@@ -5,6 +5,11 @@ import type {
   MatchMode, MonitorCadence, MonitorStatus,
 } from '../../shared/backlinks';
 
+/** A raw action_items row, as GET /api/v2/websites/:id/actions returns it (snake_case, unmapped). */
+interface DestinationProblem {
+  id: string; rule_id: string; title: string; status: string; severity: string; business_impact: string | null; last_seen_at: string;
+}
+
 function authHeaders(): Record<string, string> {
   const token = readStoredJson<string>('roundseo-token', '');
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -55,6 +60,7 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
   const [history, setHistory] = useState<{ observations: BacklinkObservation[]; events: BacklinkEvent[] } | null>(null);
   const [discoveryReason, setDiscoveryReason] = useState<string | null>(null);
+  const [destinationProblems, setDestinationProblems] = useState<DestinationProblem[]>([]);
 
   const refreshMonitors = async () => {
     const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/backlinks?limit=200`);
@@ -64,8 +70,15 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
     const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/backlink-lists`);
     if (status === 200) setLists(body.lists || []);
   };
+  // The site-wide action plan is a separate, crawl-derived screen that does not read this
+  // live table, so a monitored backlink's destination problem (src/worker/backlinks/destination-findings.ts)
+  // would otherwise never surface anywhere in the product — show it here, where the evidence came from.
+  const refreshDestinationProblems = async () => {
+    const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/actions`);
+    if (status === 200) setDestinationProblems((body.actions || []).filter((action: DestinationProblem) => action.rule_id?.startsWith('backlink_target_') && action.status !== 'verified_resolved' && action.status !== 'ignored' && action.status !== 'not_applicable'));
+  };
 
-  useEffect(() => { void refreshMonitors(); void refreshLists(); }, [websiteId]);
+  useEffect(() => { void refreshMonitors(); void refreshLists(); void refreshDestinationProblems(); }, [websiteId]);
   useEffect(() => {
     (async () => {
       const orgId = await firstOrganizationId();
@@ -161,6 +174,14 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
       <div className="capability-stat"><span>Awaiting confirmation</span><strong>{pendingConfirmation.length}</strong><p>Suspected losses waiting on their confirmation recheck.</p></div>
     </div>
 
+    {destinationProblems.length > 0 && <section className="capability-table-section" aria-label="Destination problems">
+      <div className="section-title"><div><h3>Valuable destination problems</h3><p>A monitored backlink's target page now has a problem — confirmed by the same check that verifies the link, and joined to the existing action workflow. An intentional noindex or an approved redirect is never flagged here.</p></div></div>
+      <div className="compact-ledger">{destinationProblems.map(problem => <div key={problem.id}>
+        <strong>{problem.title}</strong>
+        <span>{problem.severity} · {dateLabel(problem.last_seen_at)}</span>
+      </div>)}</div>
+    </section>}
+
     <form className="import-panel" onSubmit={addMonitor}>
       <div><h3>Add a backlink to monitor.</h3><p>RoundSEO checks the source page for the exact link you expect and keeps a dated history of every check.</p></div>
       <label>Source page (where the link should appear)<input value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} placeholder="https://news.example/review" required /></label>
@@ -236,6 +257,12 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
         <div className="capability-stat"><span>Duplicate</span><strong>{importPreview.duplicateCount}</strong></div>
         <div className="capability-stat"><span>Invalid / over limit</span><strong>{importPreview.invalidCount + importPreview.overLimitCount}</strong></div>
         {importPreview.status === 'previewed' && <div className="import-panel-actions"><button className="button solid small" type="button" onClick={commitImport}>Commit import <Icon name="check" /></button></div>}
+      </div>}
+      {importPreview && importPreview.rows.some(row => row.status === 'invalid' || row.status === 'duplicate' || row.status === 'over_limit') && <div className="compact-ledger">
+        {importPreview.rows.filter(row => row.status !== 'accepted').map(row => <div key={row.rowIndex}>
+          <strong>Row {row.rowIndex + 1}: {row.sourceUrl || 'No source URL supplied'}</strong>
+          <span>{row.status}{row.errorMessage ? ` — ${row.errorMessage}` : ''}</span>
+        </div>)}
       </div>}
     </details>
 

@@ -121,14 +121,16 @@ async function readBoundedBody(response: Response, maxBytes: number): Promise<{ 
   if (!reader) { const text = await response.text(); return { text, truncated: new TextEncoder().encode(text).length > maxBytes }; }
   const decoder = new TextDecoder();
   let length = 0; let text = '';
-  for (;;) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    length += chunk.value.byteLength;
-    if (length > maxBytes) { await reader.cancel().catch(() => undefined); return { text: '', truncated: true }; }
-    text += decoder.decode(chunk.value, { stream: true });
-  }
-  return { text: text + decoder.decode(), truncated: false };
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      length += chunk.value.byteLength;
+      if (length > maxBytes) { await reader.cancel().catch(() => undefined); return { text: '', truncated: true }; }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return { text: text + decoder.decode(), truncated: false };
+  } finally { reader.releaseLock(); }
 }
 
 export interface CheckResult { observationId: string; events: BacklinkEventType[] }
@@ -174,8 +176,11 @@ export async function runBacklinkCheck(db: Database, env: BacklinkCrawlEnv, moni
   }
 
   const observationId = newId('obs');
-  await db.prepare(`
-    INSERT INTO backlink_observations (
+  // INSERT OR IGNORE against the UNIQUE(job_id) index (migration 014): if this job was already
+  // processed — a redelivered or double-dispatched job racing a still-running execution — this is a
+  // no-op, and nothing below (occurrences, state transition, events) runs a second time (AC13).
+  const inserted = await db.prepare(`
+    INSERT OR IGNORE INTO backlink_observations (
       id, monitor_id, job_id, attempted_at, fetch_outcome, http_status, final_url, redirect_chain_json, content_type,
       presence, presence_method, confirmation_state, target_status_code, target_final_url, target_redirect_json,
       source_meta_robots, source_x_robots_tag, source_canonical, error_message, created_at
@@ -186,6 +191,10 @@ export async function runBacklinkCheck(db: Database, env: BacklinkCrawlEnv, moni
     targetHealth.statusCode, targetHealth.finalUrl, JSON.stringify(targetHealth.redirectChain),
     directives.metaRobots, fetched.xRobotsTag, directives.canonical, fetched.errorMessage, attemptedAt,
   ).run();
+  if (!inserted?.meta?.changes) {
+    const existing = await db.prepare('SELECT id FROM backlink_observations WHERE job_id = ?').bind(jobId).first();
+    return { observationId: existing ? String(existing.id) : '', events: [] };
+  }
 
   for (const occurrence of occurrences) {
     await db.prepare(`
@@ -209,8 +218,13 @@ export async function runBacklinkCheck(db: Database, env: BacklinkCrawlEnv, moni
   return { observationId, events };
 }
 
-function looksLikeClientRenderedShell(html: string, anchorCount: number): boolean {
-  if (anchorCount > 2) return false;
+/**
+ * A static shell can legitimately carry a handful of nav/footer links (Home, Blog, Contact) while
+ * the actual article body — and the backlink anchor inside it — is only added by client-side JS, so
+ * anchor count alone must never disqualify the render fallback (that would defeat AC9 on exactly the
+ * sites it exists for). An app-shell marker plus thin body text is the signal instead.
+ */
+function looksLikeClientRenderedShell(html: string, _anchorCount: number): boolean {
   const bodyMatch = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
   const bodyText = bodyMatch ? bodyMatch[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : '';
   const hasAppShell = /id=["'](root|app|__next|___gatsby)["']/i.test(html) || /<script[^>]*type=["']module["']/i.test(html);
