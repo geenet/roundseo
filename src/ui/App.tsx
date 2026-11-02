@@ -6,13 +6,10 @@ import {
   compareCompetitorKeywords,
   groupKeywordIdeas,
   normalizeDomain,
-  parseBacklinkRecords,
   parseKeywordMetrics,
   parseSerpResults,
-  summarizeBacklinks,
   summarizeRankTracking,
   summarizeSerpResults,
-  type BacklinkRecord,
   type KeywordMetric,
   type SerpResult,
 } from '../shared/search-intelligence';
@@ -34,13 +31,15 @@ import {
   SerpIntelligencePanel,
 } from './components/IntelligencePanels';
 import OnPageReport from './components/OnPageReport';
+import { BacklinksWorkspace } from './components/BacklinksPanels';
+import { IndexingWorkspace } from './components/IndexingPanels';
 import { readStoredJson, writeStoredJson, removeStoredValue } from './storage';
 
 type User = { name: string; email: string };
 type Priority = 'Critical' | 'High' | 'Medium' | 'Low';
 type Availability = 'measured' | 'not_connected' | 'not_measured' | 'insufficient' | 'partial' | 'stale' | 'failed' | 'unsupported' | 'not_applicable';
 type ActionStatus = 'open' | 'planned' | 'in_progress' | 'awaiting_verification' | 'verified_resolved' | 'recurring' | 'ignored' | 'not_applicable';
-type SiteRoute = 'overview' | 'on-page' | 'audit' | 'pageload' | 'real-user-loading' | 'analytics' | 'keywords' | 'search-intelligence' | 'backlinks' | 'ai-visibility' | 'security' | 'action-plan' | 'pages' | 'changes' | 'data-scope';
+type SiteRoute = 'overview' | 'on-page' | 'audit' | 'pageload' | 'real-user-loading' | 'analytics' | 'keywords' | 'search-intelligence' | 'backlinks' | 'indexing' | 'ai-visibility' | 'security' | 'action-plan' | 'pages' | 'changes' | 'data-scope';
 type IntelligenceTab = 'clusters' | 'rank-tracking' | 'serp-analysis' | 'competitors' | 'ppc-seo';
 type AnalyticsTab = 'pages' | 'retention';
 type LocationRoute = { domain: string | null; section: SiteRoute; pageUrl: string | null; intelligenceTab: IntelligenceTab };
@@ -77,7 +76,7 @@ type LocalPerformancePayload = { performance?: PerformanceAudit; error?: string 
 type LocalAuditJob = { id: string; status: 'running' | 'complete' | 'failed'; phase: CrawlPhase; progress: CrawlProgressState; startedAt: string; updatedAt: string; error?: string; result?: { crawl: LocalAuditPayload; performance?: PerformanceAudit; performanceError?: string } };
 type LocalRealUserPageLoadingJob = { id: string; status: 'running' | 'complete' | 'failed'; startedAt: string; updatedAt: string; progress: RealUserPageLoadingProgress; error?: string; result?: { loading: RealUserPageLoadingAudit } };
 
-const SITE_ROUTE_SECTIONS: SiteRoute[] = ['overview', 'on-page', 'audit', 'pageload', 'real-user-loading', 'analytics', 'keywords', 'search-intelligence', 'backlinks', 'ai-visibility', 'security', 'action-plan', 'pages', 'changes', 'data-scope'];
+const SITE_ROUTE_SECTIONS: SiteRoute[] = ['overview', 'on-page', 'audit', 'pageload', 'real-user-loading', 'analytics', 'keywords', 'search-intelligence', 'backlinks', 'indexing', 'ai-visibility', 'security', 'action-plan', 'pages', 'changes', 'data-scope'];
 const INTELLIGENCE_TABS: Array<{ key: IntelligenceTab; label: string }> = [
   { key: 'clusters', label: 'Clustering' },
   { key: 'rank-tracking', label: 'Rank tracking' },
@@ -94,7 +93,8 @@ const SITE_ROUTE_COPY: Record<SiteRoute, { title: string; description: string }>
   analytics: { title: 'Audience & engagement', description: 'Imported page and cohort analytics, held apart from crawl evidence' },
   keywords: { title: 'Keyword research', description: 'Crawl-derived topics plus provider or imported search metrics and target tracking' },
   'search-intelligence': { title: 'Search intelligence', description: 'Clustering, rankings, SERPs, competitors and PPC / SEO decisions from source records' },
-  backlinks: { title: 'Backlink analysis', description: 'Imported referring-domain data with a clear boundary around crawl evidence' },
+  backlinks: { title: 'Backlinks', description: 'Monitored inbound links, verification history, lists and confirmed-change alerts' },
+  indexing: { title: 'Indexing', description: "Google's own index evidence for this website, inspections, and sitemap submission" },
   'ai-visibility': { title: 'AI search visibility', description: 'Sampled prompts and recorded mentions across answer engines' },
   security: { title: 'Security & SSL checks', description: 'Transport, TLS and response-security signals collected with the crawl' },
   'action-plan': { title: 'Priority action plan', description: 'Prioritised work tied to evidence, verification and AI-ready fixes' },
@@ -141,23 +141,11 @@ function keywordResearchStorageKey(domain: string): string { return `roundseo-ke
 function rankTrackingStorageKey(domain: string): string { return `roundseo-rank-tracking-${normalizeSiteDomain(domain)}`; }
 function serpAnalysisStorageKey(domain: string): string { return `roundseo-serp-analysis-${normalizeSiteDomain(domain)}`; }
 function competitorResearchStorageKey(domain: string): string { return `roundseo-competitor-keywords-${normalizeSiteDomain(domain)}`; }
-function backlinkAnalysisStorageKey(domain: string): string { return `roundseo-backlink-analysis-${normalizeSiteDomain(domain)}`; }
 function pageAnalyticsStorageKey(domain: string): string { return `roundseo-page-analytics-${normalizeSiteDomain(domain)}`; }
 function retentionCohortsStorageKey(domain: string): string { return `roundseo-retention-cohorts-${normalizeSiteDomain(domain)}`; }
 function formatSourceNumber(value: number | null, fractionDigits = 0): string { return value === null ? 'Not supplied' : new Intl.NumberFormat(undefined, { maximumFractionDigits: fractionDigits, minimumFractionDigits: fractionDigits }).format(value); }
 function dateLabel(value: string | null): string { return value ? new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Date not supplied'; }
 function crawlKeywordMetrics(pages: PageRecord[], domain: string): KeywordMetric[] { return deriveKeywordSuggestions(pages).map(suggestion => ({ id: `crawl-keyword-${encodeURIComponent(suggestion.term)}-${encodeURIComponent(suggestion.pageUrl)}`, keyword: suggestion.term, volume: null, difficulty: null, cpc: null, intent: null, position: null, domain: normalizeDomain(domain), landingPage: suggestion.pageUrl, checkedAt: null, source: 'Crawl observation' })); }
-function storedBacklinks(domain: string): BacklinkRecord[] {
-  const current = readJson<BacklinkRecord[]>(backlinkAnalysisStorageKey(domain), []);
-  if (current.length) return current;
-  const legacy = readJson<Array<{ id?: string; referringPage?: string; referringDomain?: string; anchorText?: string }>>(`roundseo-backlinks-${normalizeSiteDomain(domain)}`, []);
-  return legacy.flatMap((record, index) => {
-    const referringPage = record.referringPage || null;
-    const referringDomain = normalizeDomain(record.referringDomain) || normalizeDomain(referringPage);
-    if (!referringDomain) return [];
-    return [{ id: record.id || `legacy-backlink-${index}-${referringDomain}`, referringPage, referringDomain, targetPage: null, anchorText: record.anchorText || null, linkAttribute: 'unknown' as const, firstSeen: null, source: 'Earlier local import' }];
-  });
-}
 function loadWebsites(): Website[] { return readJson<Website[]>('roundseo-websites', []).filter(site => site && typeof site.id === 'string' && typeof site.domain === 'string' && typeof site.name === 'string').map(site => {
   const result = site.result?.source === 'live' && site.result.pagesInventory ? site.result : undefined;
   const interrupted = site.status === 'running' && !site.crawlJobId;
@@ -678,6 +666,7 @@ function AuditWorkspace({ website, section, selectedPageUrl, intelligenceTab, on
       <AuditRouteLink active={section === 'keywords'} href={href('keywords')}>Keyword research</AuditRouteLink>
       <AuditRouteLink active={section === 'search-intelligence'} href={href('search-intelligence', null, 'clusters')}>Search intelligence</AuditRouteLink>
       <AuditRouteLink active={section === 'backlinks'} href={href('backlinks')}>Backlinks</AuditRouteLink>
+      <AuditRouteLink active={section === 'indexing'} href={href('indexing')}>Indexing</AuditRouteLink>
       <AuditRouteLink active={section === 'ai-visibility'} href={href('ai-visibility')}>AI visibility</AuditRouteLink>
       <AuditRouteLink active={section === 'security'} href={href('security')}>Security & SSL</AuditRouteLink>
       <AuditRouteLink active={section === 'action-plan'} href={href('action-plan')}>Priority issues <b>{openActions.length}</b></AuditRouteLink>
@@ -706,7 +695,8 @@ function AuditWorkspace({ website, section, selectedPageUrl, intelligenceTab, on
     {section === 'analytics' && <AnalyticsView key={website.id} websiteDomain={website.domain} />}
     {section === 'keywords' && <KeywordView key={website.id} websiteId={website.id} pages={result.pagesInventory} onOpenPage={url => onNavigate('pages', url)} websiteDomain={website.domain} onOpenIntelligence={() => onNavigate('search-intelligence', null, 'clusters')} />}
     {section === 'search-intelligence' && <SearchIntelligenceView key={website.id} websiteId={website.id} websiteDomain={website.domain} pages={result.pagesInventory} activeTab={intelligenceTab} onSelectTab={tab => onNavigate('search-intelligence', null, tab)} onOpenKeywordResearch={() => onNavigate('keywords')} />}
-    {section === 'backlinks' && <BacklinkView key={website.id} websiteDomain={website.domain} result={result} />}
+    {section === 'backlinks' && <BacklinksWorkspace key={website.id} websiteId={website.id} />}
+    {section === 'indexing' && <IndexingWorkspace key={website.id} websiteId={website.id} />}
     {section === 'ai-visibility' && <AiVisibilityView key={website.id} websiteId={website.id} websiteDomain={website.domain} />}
     {section === 'security' && <SecurityView website={website} result={result} onRun={onRun} />}
     {section === 'action-plan' && <ActionPlan actions={result.actions} onUpdateAction={onUpdateAction} onOpenPage={url => onNavigate('pages', url)} />}
@@ -780,7 +770,8 @@ function CapabilityMap({ result, websiteDomain, onNavigate }: { result: AuditRes
     { route: 'search-intelligence', tab: 'serp-analysis', icon: 'search', label: 'SERP analysis', detail: 'Run live searches or inspect imported result types, domains and placements', state: 'Run SERP', tone: 'connect' },
     { route: 'search-intelligence', tab: 'competitors', icon: 'globe', label: 'Competitor keyword research', detail: 'Compare source-recorded positions by competitor domain', state: 'Import competitor data', tone: 'connect' },
     { route: 'search-intelligence', tab: 'ppc-seo', icon: 'clock', label: 'PPC / SEO intelligence', detail: 'Prioritise supplied CPC, position and SERP evidence together', state: 'Open PPC / SEO', tone: 'connect' },
-    { route: 'backlinks', icon: 'globe', label: 'Backlink analysis', detail: 'Import referring-domain, anchor and target-page records', state: 'Import data', tone: 'connect' },
+    { route: 'backlinks', icon: 'globe', label: 'Backlink monitoring', detail: 'Verified source-page checks, history and confirmed-change alerts', state: 'Open backlinks', tone: 'connect' },
+    { route: 'indexing', icon: 'search', label: 'Indexing', detail: "Google's own index evidence, inspections and sitemap submission", state: 'Open indexing', tone: 'connect' },
     { route: 'ai-visibility', icon: 'radar', label: 'AI search visibility', detail: 'Record sampled prompts and brand mentions', state: 'Record samples', tone: 'connect' },
     { route: 'security', icon: 'check', label: 'Security & SSL checks', detail: 'HTTPS, TLS and response-header observations', state: securityReady ? 'Measured' : 'Run new audit', tone: securityReady ? 'ready' : 'partial' },
     { route: 'action-plan', icon: 'arrow', label: 'Priority issues action plan', detail: 'Evidence-backed work with verification steps', state: `${openActions} open`, tone: openActions ? 'partial' : 'ready' },
@@ -887,41 +878,8 @@ function KeywordView({ pages, websiteId, websiteDomain, onOpenPage, onOpenIntell
   </section>;
 }
 
-function BacklinkView({ websiteDomain, result }: { websiteDomain: string; result: AuditResult }) {
-  const storageKey = backlinkAnalysisStorageKey(websiteDomain);
-  const [backlinks, setBacklinks] = useState<BacklinkRecord[]>(() => storedBacklinks(websiteDomain));
-  const [draft, setDraft] = useState('');
-  const [message, setMessage] = useState('');
-  const [query, setQuery] = useState('');
-  const [facet, setFacet] = useState<{ field: 'referringDomain' | 'anchorText' | 'targetPage' | 'linkAttribute'; value: string } | null>(null);
-  const evidenceRef = useRef<HTMLElement>(null);
-  useEffect(() => { writeStoredJson(storageKey, backlinks); }, [storageKey, backlinks]);
-  const outbound = result.pagesInventory.flatMap(page => page.linkEvidence.filter(link => !link.isInternal && link.target).map(link => link.target as string));
-  const summary = summarizeBacklinks(backlinks);
-  const visible = backlinks.filter(record => (!facet || record[facet.field] === facet.value) && [record.referringPage, record.referringDomain, record.targetPage, record.anchorText, record.linkAttribute, record.source].some(value => value?.toLowerCase().includes(query.trim().toLowerCase())));
-  const showEvidence = (nextFacet: typeof facet = null) => { setFacet(nextFacet); setQuery(''); evidenceRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
-  const importBacklinks = (event: FormEvent) => {
-    event.preventDefault();
-    const parsed = parseBacklinkRecords(draft, { sourceLabel: 'Backlink export' });
-    if (!parsed.items.length) { setMessage(parsed.errors[0] || 'No usable backlink rows were found.'); return; }
-    setBacklinks(current => mergeById(current, parsed.items));
-    setDraft('');
-    setMessage(`${parsed.items.length} backlink row${parsed.items.length === 1 ? '' : 's'} imported.${parsed.errors.length ? ` ${parsed.errors.length} row${parsed.errors.length === 1 ? '' : 's'} need review.` : ''}`);
-  };
-  return <section className="audit-view capability-view backlink-view">
-    <div className="section-title"><div><h2>Analyze inbound links without overstating what a crawl can see.</h2><p>A site crawl records outbound links. This workspace adds inbound evidence only from the backlink records you import, including referring pages, targets, anchors, and link attributes.</p></div></div>
-    <div className="capability-stat-band"><div className="capability-stat"><span>Imported backlink rows</span><strong>{backlinks.length}</strong><p>{summary.referringPages} rows include a referring-page URL.</p>{backlinks.length > 0 && <button className="text-action" onClick={() => showEvidence()}>View all backlinks</button>}</div><div className="capability-stat"><span>Referring domains</span><strong>{summary.referringDomains}</strong><p>Unique domains in the imported sample.</p>{backlinks.length > 0 && <a className="text-action" href="#referring-domains">Explore referring domains</a>}</div><div className="capability-stat"><span>Link attributes</span><strong>{summary.follow} / {summary.nofollow}</strong><p>Follow / nofollow rows; {summary.unknown} attribute{summary.unknown === 1 ? '' : 's'} unspecified.</p>{backlinks.length > 0 && <button className="text-action" onClick={() => showEvidence()}>Inspect link attributes</button>}</div></div>
-    {backlinks.length > 0 && <section className="backlink-evidence" id="backlink-evidence" ref={evidenceRef} aria-labelledby="backlink-evidence-title"><div className="section-title"><div><h3 id="backlink-evidence-title">Individual backlinks</h3><p>Each row is an imported record. Open the referring page to check the link; missing fields were not supplied by the source.</p></div><label className="table-search"><span className="sr-only">Filter backlink evidence</span><Icon name="search" /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Filter backlinks" /></label></div><div className="backlink-evidence-count"><span>{visible.length} of {backlinks.length} backlink{backlinks.length === 1 ? '' : 's'} shown{facet ? ` · ${facet.value}` : ''}</span>{(facet || query) && <button className="text-action" onClick={() => { setFacet(null); setQuery(''); }}>Clear filters</button>}</div><div className="backlink-evidence-list">{visible.map(record => <article className="backlink-evidence-row" key={record.id}><div className="backlink-evidence-origin"><span>Referring page</span>{record.referringPage ? <BacklinkEvidenceLink value={record.referringPage} /> : <strong>Not supplied</strong>}<small>Domain: {record.referringDomain || 'Not supplied'}</small></div><dl><div><dt>Target page</dt><dd>{record.targetPage ? <BacklinkEvidenceLink value={record.targetPage} /> : 'Not supplied'}</dd></div><div><dt>Anchor text</dt><dd>{record.anchorText || 'Not supplied'}</dd></div><div><dt>Link attribute</dt><dd>{record.linkAttribute === 'unknown' ? 'Not supplied' : record.linkAttribute}</dd></div><div><dt>First seen</dt><dd>{record.firstSeen ? (Number.isNaN(Date.parse(record.firstSeen)) ? record.firstSeen : dateLabel(record.firstSeen)) : 'Not supplied'}</dd></div><div><dt>Source</dt><dd>{record.source || 'Not supplied'}</dd></div></dl></article>)}{!visible.length && <EmptyRow message="No backlink records match these filters." />}</div></section>}
-    <form className="import-panel" onSubmit={importBacklinks}><div><h3>Import backlink records.</h3><p>CSV, TSV, and semicolon-separated exports work. The importer understands common referring-page, domain, target-page, anchor, rel, first-seen, and source headers.</p><p className="import-format">Expected headers: referring_page, referring_domain, target_page, anchor_text, rel, first_seen, source</p></div><label>Backlink export<textarea value={draft} onChange={event => setDraft(event.target.value)} rows={5} placeholder="referring_page,target_page,anchor_text,rel,first_seen&#10;https://news.example/review,https://your-site.example/seo,RoundSEO review,follow,2026-10-31" /></label><div className="import-panel-actions"><button className="button solid small" type="submit">Import backlinks <Icon name="arrow" /></button>{message && <span role="status">{message}</span>}</div></form>
-    {backlinks.length ? <><section className="capability-table-section" id="referring-domains"><div className="section-title"><div><h3>Referring domains.</h3><p>Counts reflect only imported records. Select a domain to see its backlinks.</p></div></div><div className="backlink-list">{summary.domains.map(item => <div className="backlink-row" key={item.value}><div><button className="text-action backlink-facet" onClick={() => showEvidence({ field: 'referringDomain', value: item.value })}>{item.value}</button><small>{item.count} imported backlink row{item.count === 1 ? '' : 's'}</small></div><span>{backlinks.filter(record => record.referringDomain === item.value).slice(0, 2).map(record => record.anchorText || 'No anchor supplied').join(' · ')}</span></div>)}</div></section><div className="backlink-detail-grid"><section><h3>Anchor patterns</h3>{summary.anchors.length ? <div className="compact-ledger">{summary.anchors.map(item => <div key={item.value}><button className="text-action backlink-facet" onClick={() => showEvidence({ field: 'anchorText', value: item.value })}>{item.value}</button><span>{item.count}</span></div>)}</div> : <p className="quiet">No anchor text was supplied.</p>}</section><section><h3>Linked target pages</h3>{summary.targets.length ? <div className="compact-ledger">{summary.targets.map(item => <div key={item.value}><button className="text-action backlink-facet" title={item.value} onClick={() => showEvidence({ field: 'targetPage', value: item.value })}>{pathFor(item.value)}</button><span>{item.count}</span></div>)}</div> : <p className="quiet">No target-page URLs were supplied.</p>}</section></div></> : <div className="capability-empty"><Icon name="globe" /><p>Import a backlink export to unlock referring-domain counts, anchor patterns, link attributes, and linked-target analysis. The {outbound.length} external link{outbound.length === 1 ? '' : 's'} found in this crawl stay separate because they are not backlinks.</p></div>}
-  </section>;
-}
-
-function BacklinkEvidenceLink({ value }: { value: string }) {
-  let safe = false;
-  try { safe = ['http:', 'https:'].includes(new URL(value).protocol); } catch { /* Preserve unrecognised source values as text. */ }
-  return safe ? <a href={value} target="_blank" rel="noreferrer">{value}</a> : <span>{value}</span>;
-}
+// Backlinks are now a real, server-backed module (see components/BacklinksPanels.tsx) —
+// the previous localStorage-only CSV import view was replaced, not kept as a fallback.
 
 function SearchIntelligenceView({ websiteId, websiteDomain, pages, activeTab, onSelectTab, onOpenKeywordResearch }: { websiteId: string; websiteDomain: string; pages: PageRecord[]; activeTab: IntelligenceTab; onSelectTab: (tab: IntelligenceTab) => void; onOpenKeywordResearch: () => void }) {
   const rankStorage = rankTrackingStorageKey(websiteDomain);
@@ -1479,7 +1437,6 @@ function ScopeView({ result, websiteDomain }: { result: AuditResult; websiteDoma
   const rankTracking = readJson<KeywordMetric[]>(rankTrackingStorageKey(websiteDomain), []);
   const serpAnalysis = readJson<SerpResult[]>(serpAnalysisStorageKey(websiteDomain), []);
   const competitorResearch = readJson<KeywordMetric[]>(competitorResearchStorageKey(websiteDomain), []);
-  const backlinks = storedBacklinks(websiteDomain);
   const pageAnalytics = summarizePageAnalytics(readJson<AnalyticsPageRecord[]>(pageAnalyticsStorageKey(websiteDomain), []));
   const retentionCohorts = summarizeRetentionCohorts(readJson<RetentionCohortRecord[]>(retentionCohortsStorageKey(websiteDomain), []));
   return <section className="audit-view scope-view">
@@ -1502,7 +1459,7 @@ function ScopeView({ result, websiteDomain }: { result: AuditResult; websiteDoma
         <ScopeDefinition label="Evidence" value={!performance ? 'Not measured' : performance.availability !== 'measured' && performance.availability !== 'partial' ? 'No usable result' : fieldData.length ? 'Lab + field' : 'Lab only'} detail={!performance ? 'No browser test has been stored for this website yet.' : performance.availability !== 'measured' && performance.availability !== 'partial' ? performance.error || 'The browser did not return usable timing evidence.' : fieldData.length ? `Real-user metrics were available at ${fieldData.map(device => `${device.device} ${device.fieldDataScope}`).join(', ')} scope.` : performance.sourceNote || 'A controlled test cannot measure real visitors or real-user INP.'} />
       </section>
       <section><h3>Sources & integrations</h3>{result.dataSources.filter(source => source.key !== 'performance' && source.key !== 'analytics').map(source => <ScopeDefinition key={source.key} label={source.label} value={availabilityCopy(source.availability)} detail={source.detail} />)}<ScopeDefinition label="Audience & engagement" value={pageAnalytics.pageCount || retentionCohorts.cohortCount ? 'Imported locally' : 'Not imported'} detail={pageAnalytics.pageCount || retentionCohorts.cohortCount ? `${pageAnalytics.pageCount} page rows and ${retentionCohorts.cohortCount} cohort labels are stored from pasted exports. This is not a live provider connection.` : 'Import a Pages and screens or retention export in Audience & engagement to add source-reported visitor data.'} /></section>
-      <section><h3>Research imports</h3><ScopeDefinition label="Keyword research" value={keywordResearch.length ? `${keywordResearch.length} local rows` : 'Not imported'} detail={keywordResearch.length ? 'User-imported keyword metrics and target records. Values remain exactly as supplied by the source.' : 'Crawl language is available in Keyword research, but no keyword-metric export has been imported.'} /><ScopeDefinition label="Rank tracking" value={rankTracking.length ? `${rankTracking.length} local rows` : 'Not imported'} detail={rankTracking.length ? 'Dated position records used only for transparent before-and-after movement.' : 'No dated rank export is stored for this website.'} /><ScopeDefinition label="SERP analysis" value={serpAnalysis.length ? `${serpAnalysis.length} local rows` : 'Not imported'} detail={serpAnalysis.length ? 'Result rows, types, domains, and positions from the imported SERP sample.' : 'No SERP export is stored, so RoundSEO does not claim what appears in a live result page.'} /><ScopeDefinition label="Competitors & links" value={competitorResearch.length || backlinks.length ? `${competitorResearch.length} competitor · ${backlinks.length} link rows` : 'Not imported'} detail={competitorResearch.length || backlinks.length ? 'Competitor position and backlink records are locally stored imports, separate from the public site crawl.' : 'No competitor keyword or backlink exports are stored for this website.'} /></section>
+      <section><h3>Research imports</h3><ScopeDefinition label="Keyword research" value={keywordResearch.length ? `${keywordResearch.length} local rows` : 'Not imported'} detail={keywordResearch.length ? 'User-imported keyword metrics and target records. Values remain exactly as supplied by the source.' : 'Crawl language is available in Keyword research, but no keyword-metric export has been imported.'} /><ScopeDefinition label="Rank tracking" value={rankTracking.length ? `${rankTracking.length} local rows` : 'Not imported'} detail={rankTracking.length ? 'Dated position records used only for transparent before-and-after movement.' : 'No dated rank export is stored for this website.'} /><ScopeDefinition label="SERP analysis" value={serpAnalysis.length ? `${serpAnalysis.length} local rows` : 'Not imported'} detail={serpAnalysis.length ? 'Result rows, types, domains, and positions from the imported SERP sample.' : 'No SERP export is stored, so RoundSEO does not claim what appears in a live result page.'} /><ScopeDefinition label="Competitors" value={competitorResearch.length ? `${competitorResearch.length} local rows` : 'Not imported'} detail={competitorResearch.length ? 'Competitor position records are locally stored imports, separate from the public site crawl.' : 'No competitor keyword export is stored for this website.'} /><ScopeDefinition label="Backlinks" value="Server-side module" detail="Monitored backlinks, their checks, and Google indexing evidence are stored by the API, not as a local import — see the Backlinks and Indexing tabs." /></section>
     </div>
     <UrlReconciliation pages={result.pagesInventory} />
     {result.crawlCoverage.pendingUrls?.length ? <section className="pending-urls"><h3>Discovered URLs not attempted</h3><p>Showing {result.crawlCoverage.pendingUrls.length} of {result.crawlCoverage.remainingUrls} URLs left outside this crawl.</p><ul>{result.crawlCoverage.pendingUrls.map(url => <li key={url}><a href={url} target="_blank" rel="noreferrer">{url} ↗</a></li>)}</ul></section> : null}

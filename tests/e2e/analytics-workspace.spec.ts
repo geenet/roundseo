@@ -121,32 +121,5 @@ test('shows exact on-page values, all inspected pages and supporting references'
   await page.screenshot({ path: testInfo.outputPath('on-page-mobile.png'), fullPage: true });
 });
 
-test('shows individual backlink evidence and drills into aggregate counts', async ({ page }, testInfo) => {
-  await page.goto('/site/example.test/backlinks');
-  await page.getByLabel('Backlink export').fill(`referring_page,target_page,anchor_text,rel,first_seen,source
-https://news.example/review,https://example.test/pricing,Example pricing,nofollow,2026-10-30,News export`);
-  await page.getByRole('button', { name: 'Import backlinks' }).click();
-  const evidence = page.locator('#backlink-evidence');
-  await expect(evidence).toContainText('1 of 1 backlink shown');
-  await expect(evidence.getByRole('link', { name: 'https://news.example/review' })).toHaveAttribute('href', 'https://news.example/review');
-  await expect(evidence.getByRole('link', { name: 'https://example.test/pricing' })).toHaveAttribute('href', 'https://example.test/pricing');
-  await expect(evidence).toContainText('Example pricing');
-  await expect(evidence).toContainText('nofollow');
-  await expect(evidence).toContainText('News export');
-  await page.screenshot({ path: testInfo.outputPath('backlinks-desktop.png'), fullPage: true });
-
-  await page.getByLabel('Backlink export').fill(`referring_page,target_page,anchor_text,rel
-https://other.example/post,https://example.test/,Home,follow`);
-  await page.getByRole('button', { name: 'Import backlinks' }).click();
-  await page.locator('#referring-domains').getByRole('button', { name: 'news.example' }).click();
-  await expect(evidence).toContainText('1 of 2 backlinks shown');
-  await expect(evidence).not.toContainText('https://other.example/post');
-  await evidence.getByRole('button', { name: 'Clear filters' }).click();
-  await expect(evidence.locator('.backlink-evidence-row')).toHaveCount(2);
-  await page.getByLabel('Filter backlink evidence').fill('Home');
-  await expect(evidence.locator('.backlink-evidence-row')).toHaveCount(1);
-  await expect(evidence).toContainText('https://other.example/post');
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath('backlinks-mobile.png'), fullPage: true });
-});
+// The localStorage-only CSV backlink import this test covered was replaced by the
+// real, server-backed Backlinks module — see tests/e2e/backlinks-workspace.spec.ts.

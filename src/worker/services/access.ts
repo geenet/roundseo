@@ -88,6 +88,61 @@ export async function canAccessAction(db: Database, userId: string, actionId: st
   return Boolean(row);
 }
 
+export async function canAccessBacklinkMonitor(db: Database, userId: string, monitorId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT monitor.id
+    FROM backlink_monitors monitor
+    JOIN organizations organization ON organization.id = monitor.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE monitor.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, monitorId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessBacklinkList(db: Database, userId: string, listId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT list.id
+    FROM backlink_lists list
+    JOIN websites website ON website.id = list.website_id
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE list.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, listId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessBacklinkImport(db: Database, userId: string, importId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT imp.id
+    FROM backlink_imports imp
+    JOIN websites website ON website.id = imp.website_id
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE imp.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, importId, userId).first();
+  return Boolean(row);
+}
+
+export async function canAccessIndexingInventoryItem(db: Database, userId: string, inventoryId: string): Promise<boolean> {
+  const row = await db.prepare(`
+    SELECT item.id
+    FROM indexing_inventory item
+    JOIN websites website ON website.id = item.website_id
+    JOIN organizations organization ON organization.id = website.organization_id
+    LEFT JOIN teams team ON team.organization_id = organization.id
+    LEFT JOIN team_members member ON member.team_id = team.id AND member.user_id = ?
+    WHERE item.id = ? AND (organization.owner_id = ? OR member.user_id IS NOT NULL)
+    LIMIT 1
+  `).bind(userId, inventoryId, userId).first();
+  return Boolean(row);
+}
+
 export async function canAccessPageIdentity(db: Database, userId: string, pageIdentityId: string): Promise<boolean> {
   const row = await db.prepare(`
     SELECT identity.id

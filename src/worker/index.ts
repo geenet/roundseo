@@ -4,12 +4,15 @@
 import { routeRequest } from './api/router';
 import { buildAuditJobMessage, createAudit, getCrawlJob, recoverExpiredCrawlJobs, runAuditJob } from './services/audits';
 import { isIntelligenceJobMessage, recoverStaleIntelligenceRuns, runIntelligenceJob, enqueueIntelligenceRun } from './services/intelligence-jobs';
+import { isBacklinkJobMessage, processBacklinkJob, recoverStaleBacklinkJobs, scheduleDueBacklinkChecks } from './backlinks/jobs';
+import { recoverStaleInspectionJobs, runInspectionJob, selectDueInspectionJobs } from './indexing/inspection-jobs';
 
 interface Env extends WorkerBindings {
   ROUNDSEO_PERFORMANCE_RUNNER_URL?: string;
   ROUNDSEO_RUNNER_TOKEN?: string;
   PERFORMANCE_RUNNER?: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
   CRAWL_JOBS?: { send(message: unknown): Promise<void> };
+  BACKLINK_JOBS?: { send(message: unknown): Promise<void> };
 }
 
 export default {
@@ -58,6 +61,11 @@ export default {
       const recoveredJobs = await recoverExpiredCrawlJobs(env.DB);
       await recoverStaleIntelligenceRuns(env as any, ctx, new Date());
       for (const message of recoveredJobs) await enqueueAuditMessage(env, ctx, message);
+
+      await scheduleDueBacklinkChecks(env.DB, env as any, ctx, new Date());
+      await recoverStaleBacklinkJobs(env.DB, env as any, ctx, new Date());
+      for (const job of await selectDueInspectionJobs(env.DB)) ctx.waitUntil(runInspectionJob(env.DB, env as any, job.id));
+      for (const job of await recoverStaleInspectionJobs(env.DB)) ctx.waitUntil(runInspectionJob(env.DB, env as any, job.id));
       const schedules = await env.DB.prepare(`
         SELECT id, website_id, schedule_type, next_run_at FROM audit_schedules
         WHERE is_active = TRUE AND next_run_at <= ?
@@ -97,6 +105,16 @@ export default {
 
   async queue(batch: any, env: Env, ctx: ExecutionContext): Promise<void> {
     for (const message of batch.messages || []) {
+      if (isBacklinkJobMessage(message.body)) {
+        try {
+          await processBacklinkJob(env as any, message.body);
+          message.ack();
+        } catch (error) {
+          console.error('Backlink job failed:', error);
+          message.retry();
+        }
+        continue;
+      }
       if (isIntelligenceJobMessage(message.body)) {
         try {
           const outcome = await runIntelligenceJob(env as any, message.body);

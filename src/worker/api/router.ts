@@ -45,6 +45,8 @@ import { assetSignature, signedAssetUrl, verifyAssetSignature } from '../service
 import { captureWebsiteMedia, listWebsiteMedia, mediaItem, storedKey } from '../services/website-media';
 import type { WebsiteMedia, WebsiteMediaItem, WebsiteMediaKind } from '../../shared/website-media';
 import { IntelligenceError, publicIntelligenceError } from '../intelligence/errors';
+import { handleBacklinkRoutes } from './backlinks-routes';
+import { handleIndexingRoutes } from './indexing-routes';
 import { domainOf } from '../intelligence/html';
 import type { ActionStatus } from '../../shared/operating-model';
 import type {
@@ -939,6 +941,12 @@ export async function routeRequest(request: Request, db: any, env: any, ctx?: Wa
   if (/^\/api\/v2\/pages\/[^/]+\/analyze$/.test(pathname)) return handleContentRoutes(pathname, request, db, env);
   if (pathname === '/api/v2/intelligence/status' || /^\/api\/v2\/websites\/[^/]+\/intelligence\/(?:runs(?:\/[^/]+(?:\/(?:refresh|cancel))?)?|evidence|assets\/[^/]+)$/.test(pathname)) {
     return handleIntelligenceRoutes(pathname, request, db, env, ctx);
+  }
+  if (/^\/api\/v2\/(?:backlink-shares\/[^/]+(?:\/revoke)?|websites\/[^/]+\/backlinks\/imports|backlinks\/imports\/[^/]+\/commit|websites\/[^/]+\/backlinks|backlinks\/[^/]+(?:\/checks|\/history)?|websites\/[^/]+\/backlink-lists|backlink-lists\/[^/]+\/(?:members|shares)|websites\/[^/]+\/discovery-jobs|organizations\/[^/]+\/backlinks\/usage)$/.test(pathname)) {
+    return handleBacklinkRoutes(pathname, request, db, env, ctx);
+  }
+  if (/^\/api\/v2\/websites\/[^/]+\/(?:google-connection(?:\/(?:start|callback|sites|property))?|indexing(?:\/(?:inventory|handoff|actions|adapters))?|inspection-jobs|sitemap-submissions)$/.test(pathname)) {
+    return handleIndexingRoutes(pathname, request, db, env, ctx);
   }
 
   return null;
