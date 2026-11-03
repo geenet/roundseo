@@ -200,6 +200,34 @@ export interface BacklinkReportShare {
   viewCount: number;
 }
 
+/** How many verified inbound links the default watchlist tracks for a website. */
+export const DEFAULT_WATCHLIST_SIZE = 10;
+
+/** Hostname that backlinks point at: the stored domain without scheme, path, or a leading "www.". */
+export function rootHostOf(domain: string): string {
+  const trimmed = domain.trim().toLowerCase();
+  let host = trimmed;
+  try {
+    host = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`).hostname;
+  } catch { /* keep the raw value; the caller's URL validation reports it */ }
+  return host.replace(/^www\./, '');
+}
+
+/** The root domain as a monitor's expected target. */
+export function rootTargetUrlFor(domain: string): string {
+  return `https://${rootHostOf(domain)}/`;
+}
+
+export interface DefaultWatchlistResult {
+  status: 'running' | 'complete' | 'unavailable' | 'failed';
+  rootTargetUrl: string;
+  candidatesChecked: number;
+  linksVerified: number;
+  /** Monitors this call created. Zero when the watchlist already existed or nothing verified. */
+  monitorsAdded: number;
+  reason: string | null;
+}
+
 /** A row the public, token-scoped share view may return. Private notes are never included. */
 export interface SharedBacklinkRow {
   sourceUrl: string;

@@ -10,6 +10,8 @@ import { addListMembers, createBacklinkList, listBacklinkLists } from '../backli
 import { getMonitorHistory } from '../backlinks/history';
 import { ManualCheckRateLimitError, queueManualBacklinkCheck, type BacklinkJobEnvironment } from '../backlinks/jobs';
 import { startDiscoveryJob } from '../backlinks/discovery';
+import { readKeyPages, saveKeyPages, seedDefaultBacklinkWatchlist } from '../backlinks/default-watchlist';
+import { rootHostOf } from '../../shared/backlinks';
 import { createReportShare, getReportShare, resolveSharedList, revokeReportShare } from '../backlinks/report-shares';
 
 type WaitUntilContext = { waitUntil(promise: Promise<unknown>): void };
@@ -165,6 +167,27 @@ export async function handleBacklinkRoutes(pathname: string, request: Request, d
       const body = await request.json().catch(() => ({})) as { budget?: number };
       const job = await startDiscoveryJob(db, env, website.id, website.domain, body.budget || 0, idempotencyKey, auth.userId);
       return json({ job }, 202);
+    }
+
+    // Key pages are optional and used only by the watchlist fallback; nothing is searched until the user saves them.
+    const keyPagesMatch = pathname.match(/^\/api\/v2\/websites\/([^/]+)\/backlinks\/key-pages$/);
+    if (keyPagesMatch && (request.method === 'GET' || request.method === 'PUT')) {
+      if (!(await canAccessWebsite(db, auth.userId, keyPagesMatch[1]))) return notFound();
+      const website = await getWebsite(db, keyPagesMatch[1]);
+      if (!website) return notFound();
+      if (request.method === 'GET') return json({ pages: await readKeyPages(db, website.id, rootHostOf(website.domain)) });
+      const body = await request.json().catch(() => null) as { pages?: unknown } | null;
+      if (!Array.isArray(body?.pages)) return badRequest('Provide the key pages as a list of URLs.');
+      return json({ pages: await saveKeyPages(db, website, body.pages) });
+    }
+
+    const watchlistMatch = pathname.match(/^\/api\/v2\/websites\/([^/]+)\/backlinks\/default-watchlist$/);
+    if (watchlistMatch && request.method === 'POST') {
+      if (!(await canAccessWebsite(db, auth.userId, watchlistMatch[1]))) return notFound();
+      const website = await getWebsite(db, watchlistMatch[1]);
+      if (!website) return notFound();
+      const watchlist = await seedDefaultBacklinkWatchlist(db, env, website, auth.userId);
+      return json({ watchlist });
     }
 
     const usageMatch = pathname.match(/^\/api\/v2\/organizations\/([^/]+)\/backlinks\/usage$/);

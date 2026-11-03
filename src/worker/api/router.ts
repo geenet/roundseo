@@ -942,7 +942,7 @@ export async function routeRequest(request: Request, db: any, env: any, ctx?: Wa
   if (pathname === '/api/v2/intelligence/status' || /^\/api\/v2\/websites\/[^/]+\/intelligence\/(?:runs(?:\/[^/]+(?:\/(?:refresh|cancel))?)?|evidence|assets\/[^/]+)$/.test(pathname)) {
     return handleIntelligenceRoutes(pathname, request, db, env, ctx);
   }
-  if (/^\/api\/v2\/(?:backlink-shares\/[^/]+(?:\/revoke)?|websites\/[^/]+\/backlinks\/imports|backlinks\/imports\/[^/]+\/commit|websites\/[^/]+\/backlinks|backlinks\/[^/]+(?:\/checks|\/history)?|websites\/[^/]+\/backlink-lists|backlink-lists\/[^/]+\/(?:members|shares)|websites\/[^/]+\/discovery-jobs|organizations\/[^/]+\/backlinks\/usage)$/.test(pathname)) {
+  if (/^\/api\/v2\/(?:backlink-shares\/[^/]+(?:\/revoke)?|websites\/[^/]+\/backlinks\/(?:imports|default-watchlist|key-pages)|backlinks\/imports\/[^/]+\/commit|websites\/[^/]+\/backlinks|backlinks\/[^/]+(?:\/checks|\/history)?|websites\/[^/]+\/backlink-lists|backlink-lists\/[^/]+\/(?:members|shares)|websites\/[^/]+\/discovery-jobs|organizations\/[^/]+\/backlinks\/usage)$/.test(pathname)) {
     return handleBacklinkRoutes(pathname, request, db, env, ctx);
   }
   if (/^\/api\/v2\/websites\/[^/]+\/(?:google-connection(?:\/(?:start|callback|sites|property))?|indexing(?:\/(?:inventory|handoff|actions|adapters))?|inspection-jobs|sitemap-submissions)$/.test(pathname)) {

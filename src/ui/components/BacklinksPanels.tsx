@@ -4,6 +4,7 @@ import type {
   BacklinkCapacity, BacklinkEvent, BacklinkImportPreview, BacklinkList, BacklinkMonitor, BacklinkObservation,
   MatchMode, MonitorCadence, MonitorStatus,
 } from '../../shared/backlinks';
+import { DEFAULT_WATCHLIST_SIZE, rootHostOf, rootTargetUrlFor } from '../../shared/backlinks';
 
 /** A raw action_items row, as GET /api/v2/websites/:id/actions returns it (snake_case, unmapped). */
 interface DestinationProblem {
@@ -52,8 +53,11 @@ function Icon({ name }: { name: 'arrow' | 'check' | 'clock' | 'search' | 'globe'
   return <svg className="icon" aria-hidden="true" viewBox="0 0 24 24"><path d={paths[name]} /></svg>;
 }
 
-export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
+export function BacklinksWorkspace({ websiteId, websiteDomain }: { websiteId: string; websiteDomain: string }) {
+  const rootHost = rootHostOf(websiteDomain);
+  const rootTarget = rootTargetUrlFor(websiteDomain);
   const [monitors, setMonitors] = useState<BacklinkMonitor[]>([]);
+  const [watchlistNote, setWatchlistNote] = useState<string | null>(null);
   const [lists, setLists] = useState<BacklinkList[]>([]);
   const [capacity, setCapacity] = useState<BacklinkCapacity | null>(null);
   const [message, setMessage] = useState('');
@@ -62,9 +66,12 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
   const [discoveryReason, setDiscoveryReason] = useState<string | null>(null);
   const [destinationProblems, setDestinationProblems] = useState<DestinationProblem[]>([]);
 
-  const refreshMonitors = async () => {
+  /** Returns the monitor count, or null when the list could not be read. */
+  const refreshMonitors = async (): Promise<number | null> => {
     const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/backlinks?limit=200`);
-    if (status === 200) setMonitors(body.monitors || []);
+    if (status !== 200) return null;
+    setMonitors(body.monitors || []);
+    return (body.monitors || []).length;
   };
   const refreshLists = async () => {
     const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/backlink-lists`);
@@ -78,7 +85,43 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
     if (status === 200) setDestinationProblems((body.actions || []).filter((action: DestinationProblem) => action.rule_id?.startsWith('backlink_target_') && action.status !== 'verified_resolved' && action.status !== 'ignored' && action.status !== 'not_applicable'));
   };
 
-  useEffect(() => { void refreshMonitors(); void refreshLists(); void refreshDestinationProblems(); }, [websiteId]);
+  // With no monitors yet, the default watchlist searches the public web for pages linking to the
+  // root domain. The server runs it once per website and returns the stored result afterwards.
+  const seedWatchlist = async () => {
+    setWatchlistNote(`Searching the public web for up to ${DEFAULT_WATCHLIST_SIZE} pages that link to ${rootHost}…`);
+    const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/backlinks/default-watchlist`, { method: 'POST' });
+    if (status !== 200) { setWatchlistNote(body?.error || 'Could not search for default backlinks.'); return; }
+    setWatchlistNote(body.watchlist.reason);
+    if (body.watchlist.monitorsAdded > 0) await refreshMonitors();
+  };
+
+  const [keyPagesDraft, setKeyPagesDraft] = useState('');
+  const refreshKeyPages = async () => {
+    const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/backlinks/key-pages`);
+    if (status === 200) setKeyPagesDraft((body.pages || []).join('\n'));
+  };
+  // Saved key pages are used only by the fallback, so a new list is searched only while the watchlist is empty.
+  const saveKeyPages = async (event: FormEvent) => {
+    event.preventDefault();
+    const pages = keyPagesDraft.split('\n').map(line => line.trim()).filter(Boolean);
+    const { status, body } = await apiFetch(`/api/v2/websites/${encodeURIComponent(websiteId)}/backlinks/key-pages`, { method: 'PUT', body: JSON.stringify({ pages }) });
+    if (status !== 200) { setWatchlistNote(body?.error || 'Could not save key pages.'); return; }
+    setKeyPagesDraft((body.pages || []).join('\n'));
+    if ((await refreshMonitors()) === 0) await seedWatchlist();
+    else setWatchlistNote('Key pages saved. They are searched only while no monitor exists.');
+  };
+
+  useEffect(() => {
+    // The cleanup flag stops a superseded mount (React StrictMode runs effects twice) from searching again.
+    let current = true;
+    void (async () => {
+      if ((await refreshMonitors()) === 0 && current) await seedWatchlist();
+    })();
+    void refreshKeyPages();
+    void refreshLists();
+    void refreshDestinationProblems();
+    return () => { current = false; };
+  }, [websiteId]);
   useEffect(() => {
     (async () => {
       const orgId = await firstOrganizationId();
@@ -89,8 +132,8 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
   }, []);
 
   const [sourceUrl, setSourceUrl] = useState('');
-  const [targetUrl, setTargetUrl] = useState('');
-  const [matchMode, setMatchMode] = useState<MatchMode>('exact_page');
+  const [targetUrl, setTargetUrl] = useState(rootTarget);
+  const [matchMode, setMatchMode] = useState<MatchMode>('domain_wide');
   const [cadence, setCadence] = useState<MonitorCadence>('weekly');
   const addMonitor = async (event: FormEvent) => {
     event.preventDefault();
@@ -99,7 +142,7 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
     });
     if (status === 200 || status === 201) {
       setMessage('Monitor added. Its first check runs on the next scheduled sweep.');
-      setSourceUrl(''); setTargetUrl('');
+      setSourceUrl(''); setTargetUrl(rootTarget);
       await refreshMonitors();
     } else setMessage(body?.error || 'Could not add this monitor.');
   };
@@ -167,6 +210,19 @@ export function BacklinksWorkspace({ websiteId }: { websiteId: string }) {
       <h2>Monitor the backlinks you already know about.</h2>
       <p>Each monitor tracks one source page and the expected target link. A suspected loss needs a second, independent check before it is confirmed — a blocked, timed-out, or truncated attempt never counts as a removal.</p>
     </div></div>
+
+    <section className="capability-table-section" aria-label="Default watchlist">
+      <div className="section-title"><div>
+        <h3>Default watchlist for {rootHost}</h3>
+        <p>Tracks up to {DEFAULT_WATCHLIST_SIZE} public pages whose HTML links to {rootHost}. A page is added only after it is fetched and the link is found, so no list is entered by hand.</p>
+      </div></div>
+      {watchlistNote && <p role="status">{watchlistNote}</p>}
+      <form className="import-panel" onSubmit={saveKeyPages}>
+        <label>Key pages, optional (one per line)<textarea value={keyPagesDraft} onChange={e => setKeyPagesDraft(e.target.value)} rows={3} placeholder={'/pricing\n/features'} /></label>
+        <p className="import-format">Searched only when no public page links to {rootHost}. Leave empty to watch the root domain only.</p>
+        <div className="import-panel-actions"><button className="button outline small" type="submit">Save key pages</button></div>
+      </form>
+    </section>
 
     <div className="capability-stat-band">
       <div className="capability-stat"><span>Active monitors</span><strong>{active.length}</strong><p>{capacity ? `${capacity.used} of ${capacity.limit} workspace slots used.` : 'Loading workspace capacity…'}</p></div>

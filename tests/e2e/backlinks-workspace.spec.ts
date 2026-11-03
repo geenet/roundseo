@@ -83,6 +83,35 @@ test('shows monitored backlinks, queues a recheck, and surfaces its history (fal
   await expect(page.getByText(/blocked.*unconfirmed/)).toBeVisible();
 });
 
+test('with no monitors, defaults to the root domain and searches the public web for linking pages', async ({ page }) => {
+  let monitors: BacklinkMonitor[] = [];
+  let watchlistRuns = 0;
+  await page.route(url => url.pathname === '/api/v2/websites/web-1/backlinks', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ monitors, total: monitors.length }) });
+    await route.continue();
+  });
+  await page.route(url => url.pathname === '/api/v2/websites/web-1/backlinks/default-watchlist', async route => {
+    watchlistRuns += 1;
+    const found: BacklinkMonitor = {
+      ...monitor, id: 'backlink_watch1', sourceUrl: 'https://news.example/review', expectedTargetUrl: 'https://example.test/', matchMode: 'domain_wide',
+      lastConfirmedPresence: 'unknown', lastSuccessfulCheckAt: null, lastAttemptAt: null,
+    };
+    monitors = [found];
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ watchlist: { status: 'complete', rootTargetUrl: 'https://example.test/', candidatesChecked: 5, linksVerified: 1, monitorsAdded: 1, reason: 'Found 1 public page that links to example.test.' } }),
+    });
+  });
+
+  await page.goto('/site/example.test/backlinks');
+  await expect(page.getByRole('heading', { name: 'Default watchlist for example.test' })).toBeVisible();
+  await expect(page.getByText('Found 1 public page that links to example.test.')).toBeVisible();
+  expect(watchlistRuns).toBe(1);
+  await expect(page.getByText('https://news.example/review')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Expected target' })).toHaveValue('https://example.test/');
+  await expect(page.getByRole('combobox', { name: 'Match mode' })).toHaveValue('domain_wide');
+});
+
 test('indexing tab offers to connect Google when no property is connected', async ({ page }) => {
   await page.route('**/api/v2/websites/web-1/google-connection', async route => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ connection: null }) });

@@ -695,7 +695,7 @@ function AuditWorkspace({ website, section, selectedPageUrl, intelligenceTab, on
     {section === 'analytics' && <AnalyticsView key={website.id} websiteDomain={website.domain} />}
     {section === 'keywords' && <KeywordView key={website.id} websiteId={website.id} pages={result.pagesInventory} onOpenPage={url => onNavigate('pages', url)} websiteDomain={website.domain} onOpenIntelligence={() => onNavigate('search-intelligence', null, 'clusters')} />}
     {section === 'search-intelligence' && <SearchIntelligenceView key={website.id} websiteId={website.id} websiteDomain={website.domain} pages={result.pagesInventory} activeTab={intelligenceTab} onSelectTab={tab => onNavigate('search-intelligence', null, tab)} onOpenKeywordResearch={() => onNavigate('keywords')} />}
-    {section === 'backlinks' && <BacklinksWorkspace key={website.id} websiteId={website.id} />}
+    {section === 'backlinks' && <BacklinksWorkspace key={website.id} websiteId={website.id} websiteDomain={website.domain} />}
     {section === 'indexing' && <IndexingWorkspace key={website.id} websiteId={website.id} />}
     {section === 'ai-visibility' && <AiVisibilityView key={website.id} websiteId={website.id} websiteDomain={website.domain} />}
     {section === 'security' && <SecurityView website={website} result={result} onRun={onRun} />}
