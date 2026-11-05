@@ -47,6 +47,7 @@ import type { WebsiteMedia, WebsiteMediaItem, WebsiteMediaKind } from '../../sha
 import { IntelligenceError, publicIntelligenceError } from '../intelligence/errors';
 import { handleBacklinkRoutes } from './backlinks-routes';
 import { handleIndexingRoutes } from './indexing-routes';
+import { handleSearchPerformanceRoutes } from './search-performance-routes';
 import { domainOf } from '../intelligence/html';
 import type { ActionStatus } from '../../shared/operating-model';
 import type {
@@ -947,6 +948,9 @@ export async function routeRequest(request: Request, db: any, env: any, ctx?: Wa
   }
   if (/^\/api\/v2\/websites\/[^/]+\/(?:google-connection(?:\/(?:start|callback|sites|property))?|indexing(?:\/(?:inventory|handoff|actions|adapters))?|inspection-jobs|sitemap-submissions)$/.test(pathname)) {
     return handleIndexingRoutes(pathname, request, db, env, ctx);
+  }
+  if (/^\/api\/v2\/websites\/[^/]+\/search-performance(?:\/sync)?$/.test(pathname)) {
+    return handleSearchPerformanceRoutes(pathname, request, db, env);
   }
 
   return null;

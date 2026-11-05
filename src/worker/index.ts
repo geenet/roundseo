@@ -6,6 +6,7 @@ import { buildAuditJobMessage, createAudit, getCrawlJob, recoverExpiredCrawlJobs
 import { isIntelligenceJobMessage, recoverStaleIntelligenceRuns, runIntelligenceJob, enqueueIntelligenceRun } from './services/intelligence-jobs';
 import { isBacklinkJobMessage, processBacklinkJob, recoverStaleBacklinkJobs, scheduleDueBacklinkChecks } from './backlinks/jobs';
 import { recoverStaleInspectionJobs, runInspectionJob, selectDueInspectionJobs } from './indexing/inspection-jobs';
+import { runDueSearchPerformanceSyncs } from './search-performance/sync';
 
 interface Env extends WorkerBindings {
   ROUNDSEO_PERFORMANCE_RUNNER_URL?: string;
@@ -66,6 +67,11 @@ export default {
       await recoverStaleBacklinkJobs(env.DB, env as any, ctx, new Date());
       for (const job of await selectDueInspectionJobs(env.DB)) ctx.waitUntil(runInspectionJob(env.DB, env as any, job.id));
       for (const job of await recoverStaleInspectionJobs(env.DB)) ctx.waitUntil(runInspectionJob(env.DB, env as any, job.id));
+      try {
+        await runDueSearchPerformanceSyncs(env.DB, env as any, new Date());
+      } catch (syncError) {
+        console.error('Search performance sync run failed:', syncError);
+      }
       const schedules = await env.DB.prepare(`
         SELECT id, website_id, schedule_type, next_run_at FROM audit_schedules
         WHERE is_active = TRUE AND next_run_at <= ?

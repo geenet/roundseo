@@ -35,6 +35,12 @@ export function d1(database: Database.Database) {
         run: async () => run([]),
       };
     },
+    /** Runs bound statements in order. D1 runs a batch as one transaction; this adapter runs them sequentially. */
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
+    },
   };
 }
 

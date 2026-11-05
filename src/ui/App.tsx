@@ -33,13 +33,14 @@ import {
 import OnPageReport from './components/OnPageReport';
 import { BacklinksWorkspace } from './components/BacklinksPanels';
 import { IndexingWorkspace } from './components/IndexingPanels';
+import { SearchPerformanceWorkspace } from './components/SearchPerformancePanels';
 import { readStoredJson, writeStoredJson, removeStoredValue } from './storage';
 
 type User = { name: string; email: string };
 type Priority = 'Critical' | 'High' | 'Medium' | 'Low';
 type Availability = 'measured' | 'not_connected' | 'not_measured' | 'insufficient' | 'partial' | 'stale' | 'failed' | 'unsupported' | 'not_applicable';
 type ActionStatus = 'open' | 'planned' | 'in_progress' | 'awaiting_verification' | 'verified_resolved' | 'recurring' | 'ignored' | 'not_applicable';
-type SiteRoute = 'overview' | 'on-page' | 'audit' | 'pageload' | 'real-user-loading' | 'analytics' | 'keywords' | 'search-intelligence' | 'backlinks' | 'indexing' | 'ai-visibility' | 'security' | 'action-plan' | 'pages' | 'changes' | 'data-scope';
+type SiteRoute = 'overview' | 'on-page' | 'audit' | 'pageload' | 'real-user-loading' | 'analytics' | 'keywords' | 'search-intelligence' | 'backlinks' | 'indexing' | 'search-performance' | 'ai-visibility' | 'security' | 'action-plan' | 'pages' | 'changes' | 'data-scope';
 type IntelligenceTab = 'clusters' | 'rank-tracking' | 'serp-analysis' | 'competitors' | 'ppc-seo';
 type AnalyticsTab = 'pages' | 'retention';
 type LocationRoute = { domain: string | null; section: SiteRoute; pageUrl: string | null; intelligenceTab: IntelligenceTab };
@@ -76,7 +77,7 @@ type LocalPerformancePayload = { performance?: PerformanceAudit; error?: string 
 type LocalAuditJob = { id: string; status: 'running' | 'complete' | 'failed'; phase: CrawlPhase; progress: CrawlProgressState; startedAt: string; updatedAt: string; error?: string; result?: { crawl: LocalAuditPayload; performance?: PerformanceAudit; performanceError?: string } };
 type LocalRealUserPageLoadingJob = { id: string; status: 'running' | 'complete' | 'failed'; startedAt: string; updatedAt: string; progress: RealUserPageLoadingProgress; error?: string; result?: { loading: RealUserPageLoadingAudit } };
 
-const SITE_ROUTE_SECTIONS: SiteRoute[] = ['overview', 'on-page', 'audit', 'pageload', 'real-user-loading', 'analytics', 'keywords', 'search-intelligence', 'backlinks', 'indexing', 'ai-visibility', 'security', 'action-plan', 'pages', 'changes', 'data-scope'];
+const SITE_ROUTE_SECTIONS: SiteRoute[] = ['overview', 'on-page', 'audit', 'pageload', 'real-user-loading', 'analytics', 'keywords', 'search-intelligence', 'backlinks', 'indexing', 'search-performance', 'ai-visibility', 'security', 'action-plan', 'pages', 'changes', 'data-scope'];
 const INTELLIGENCE_TABS: Array<{ key: IntelligenceTab; label: string }> = [
   { key: 'clusters', label: 'Clustering' },
   { key: 'rank-tracking', label: 'Rank tracking' },
@@ -95,6 +96,7 @@ const SITE_ROUTE_COPY: Record<SiteRoute, { title: string; description: string }>
   'search-intelligence': { title: 'Search intelligence', description: 'Clustering, rankings, SERPs, competitors and PPC / SEO decisions from source records' },
   backlinks: { title: 'Backlinks', description: 'Monitored inbound links, verification history, lists and confirmed-change alerts' },
   indexing: { title: 'Indexing', description: "Google's own index evidence for this website, inspections, and sitemap submission" },
+  'search-performance': { title: 'Search performance', description: "Clicks, impressions, queries and pages from Google Search Console, with what changed" },
   'ai-visibility': { title: 'AI search visibility', description: 'Sampled prompts and recorded mentions across answer engines' },
   security: { title: 'Security & SSL checks', description: 'Transport, TLS and response-security signals collected with the crawl' },
   'action-plan': { title: 'Priority action plan', description: 'Prioritised work tied to evidence, verification and AI-ready fixes' },
@@ -126,7 +128,7 @@ function readLocationRoute(): LocationRoute {
 const SOURCE_TEMPLATE: DataSource[] = [
   { key: 'performance', label: 'Visitor performance', availability: 'not_measured', detail: 'Run a browser loading test to record separate mobile and desktop measurements.' },
   { key: 'real-user-loading', label: 'Real user page loading', availability: 'not_measured', detail: 'Run the visitor-path browser replay to inspect the landing page and up to ten live same-site links.' },
-  { key: 'search', label: 'Organic search', availability: 'not_connected', detail: 'Connect Google Search Console to see clicks, impressions, queries, and index inspection evidence.' },
+  { key: 'search', label: 'Organic search', availability: 'not_connected', detail: 'Connect Google Search Console, then open Search performance for clicks, impressions, queries and pages. Index evidence is in Indexing.' },
   { key: 'analytics', label: 'Audience & engagement', availability: 'not_connected', detail: 'Import a GA4 Pages and screens or retention export to bring visitor behavior into this workspace.' },
   { key: 'conversions', label: 'Conversions', availability: 'not_connected', detail: 'Connect one analytics source to measure agreed leads, purchases, or other outcomes.' },
   { key: 'ai', label: 'AI search visibility', availability: 'not_measured', detail: 'Record sampled prompts and mentions across answer engines. Referral traffic is measured separately in analytics.' },
@@ -667,6 +669,7 @@ function AuditWorkspace({ website, section, selectedPageUrl, intelligenceTab, on
       <AuditRouteLink active={section === 'search-intelligence'} href={href('search-intelligence', null, 'clusters')}>Search intelligence</AuditRouteLink>
       <AuditRouteLink active={section === 'backlinks'} href={href('backlinks')}>Backlinks</AuditRouteLink>
       <AuditRouteLink active={section === 'indexing'} href={href('indexing')}>Indexing</AuditRouteLink>
+      <AuditRouteLink active={section === 'search-performance'} href={href('search-performance')}>Search performance</AuditRouteLink>
       <AuditRouteLink active={section === 'ai-visibility'} href={href('ai-visibility')}>AI visibility</AuditRouteLink>
       <AuditRouteLink active={section === 'security'} href={href('security')}>Security & SSL</AuditRouteLink>
       <AuditRouteLink active={section === 'action-plan'} href={href('action-plan')}>Priority issues <b>{openActions.length}</b></AuditRouteLink>
@@ -697,6 +700,7 @@ function AuditWorkspace({ website, section, selectedPageUrl, intelligenceTab, on
     {section === 'search-intelligence' && <SearchIntelligenceView key={website.id} websiteId={website.id} websiteDomain={website.domain} pages={result.pagesInventory} activeTab={intelligenceTab} onSelectTab={tab => onNavigate('search-intelligence', null, tab)} onOpenKeywordResearch={() => onNavigate('keywords')} />}
     {section === 'backlinks' && <BacklinksWorkspace key={website.id} websiteId={website.id} websiteDomain={website.domain} />}
     {section === 'indexing' && <IndexingWorkspace key={website.id} websiteId={website.id} />}
+    {section === 'search-performance' && <SearchPerformanceWorkspace key={website.id} websiteId={website.id} websiteDomain={website.domain} />}
     {section === 'ai-visibility' && <AiVisibilityView key={website.id} websiteId={website.id} websiteDomain={website.domain} />}
     {section === 'security' && <SecurityView website={website} result={result} onRun={onRun} />}
     {section === 'action-plan' && <ActionPlan actions={result.actions} onUpdateAction={onUpdateAction} onOpenPage={url => onNavigate('pages', url)} />}
@@ -772,6 +776,7 @@ function CapabilityMap({ result, websiteDomain, onNavigate }: { result: AuditRes
     { route: 'search-intelligence', tab: 'ppc-seo', icon: 'clock', label: 'PPC / SEO intelligence', detail: 'Prioritise supplied CPC, position and SERP evidence together', state: 'Open PPC / SEO', tone: 'connect' },
     { route: 'backlinks', icon: 'globe', label: 'Backlink monitoring', detail: 'Verified source-page checks, history and confirmed-change alerts', state: 'Open backlinks', tone: 'connect' },
     { route: 'indexing', icon: 'search', label: 'Indexing', detail: "Google's own index evidence, inspections and sitemap submission", state: 'Open indexing', tone: 'connect' },
+    { route: 'search-performance', icon: 'search', label: 'Search performance', detail: 'Clicks, impressions, queries and pages from Google Search Console, with what changed', state: 'Open search performance', tone: 'connect' },
     { route: 'ai-visibility', icon: 'radar', label: 'AI search visibility', detail: 'Record sampled prompts and brand mentions', state: 'Record samples', tone: 'connect' },
     { route: 'security', icon: 'check', label: 'Security & SSL checks', detail: 'HTTPS, TLS and response-header observations', state: securityReady ? 'Measured' : 'Run new audit', tone: securityReady ? 'ready' : 'partial' },
     { route: 'action-plan', icon: 'arrow', label: 'Priority issues action plan', detail: 'Evidence-backed work with verification steps', state: `${openActions} open`, tone: openActions ? 'partial' : 'ready' },
